@@ -16,44 +16,157 @@ const bestMoveText = computed(() => {
   return `${cols[p.x]}${p.y + 1}`
 })
 
+const scoreText = computed(() => {
+  if (!a.latest) return '—'
+  const s = a.latest.score
+  return s > 0 ? `+${s.toFixed(1)}` : s.toFixed(1)
+})
+
 function curveSvg(): string {
   if (a.curve.length < 2) return ''
-  const w = 240
-  const h = 60
-  const max = a.curve.length - 1
-  const pts = a.curve
-    .map((c, i) => {
-      const x = (i / max) * w
-      const y = h - c.winRate * h
-      return `${x.toFixed(1)},${y.toFixed(1)}`
-    })
-    .join(' ')
-  return `<polyline points="${pts}" fill="none" stroke="#4da3ff" stroke-width="1.5"/>`
+  const w = 220
+  const h = 50
+  const pts = a.curve.map((c, i) => {
+    const x = (i / (a.curve.length - 1)) * w
+    const y = h - c.winRate * h
+    return `${x.toFixed(0)},${y.toFixed(0)}`
+  }).join(' ')
+
+  // Fill area under curve
+  const areaPts = `0,${h} ${pts} ${w},${h}`
+  return `
+    <polygon points="${areaPts}" fill="rgba(77,163,255,0.1)"/>
+    <polyline points="${pts}" fill="none" stroke="#4da3ff" stroke-width="2"/>
+    <line x1="0" y1="${h/2}" x2="${w}" y2="${h/2}" stroke="rgba(255,255,255,0.2)" stroke-dasharray="4,4"/>
+  `
 }
 </script>
 
 <template>
-  <div class="panel">
-    <h3>AI 分析</h3>
-    <p class="rate">胜率：<b>{{ winRateText }}</b></p>
-    <p>最佳着法：{{ bestMoveText }}</p>
-    <div class="curve" v-html="`<svg viewBox='0 0 240 60' width='240' height='60' style='background:#222'>${curveSvg()}</svg>`"></div>
-    <p class="hint" v-if="a.running">分析中…</p>
+  <div class="panel" v-if="a.latest || a.running">
+    <h3 class="panel-title">🔍 AI 分析</h3>
+    <div class="metrics">
+      <div class="metric">
+        <span class="metric-label">胜率</span>
+        <span class="metric-value win-rate">{{ winRateText }}</span>
+      </div>
+      <div class="metric">
+        <span class="metric-label">评分</span>
+        <span class="metric-value">{{ scoreText }}</span>
+      </div>
+    </div>
+    <div class="best-move">
+      <span class="metric-label">推荐着法</span>
+      <span class="metric-value move">{{ bestMoveText }}</span>
+    </div>
+    <div v-if="a.curve.length >= 2" class="curve-wrap">
+      <div class="chart" v-html="`<svg viewBox='0 0 220 50' width='220' height='50'>${curveSvg()}</svg>`"></div>
+      <div class="curve-labels">
+        <span>100%</span>
+        <span>50%</span>
+        <span>0%</span>
+      </div>
+    </div>
+    <p class="hint" v-if="a.running">⏳ 分析中…</p>
+  </div>
+  <div class="panel empty" v-else>
+    <h3 class="panel-title">🔍 AI 分析</h3>
+    <p class="empty-text">人机模式下自动显示</p>
   </div>
 </template>
 
 <style scoped>
 .panel {
-  background: #333;
-  border-radius: 8px;
-  padding: 12px;
-  min-width: 260px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  padding: 16px;
 }
-.rate b {
+
+.panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #aaa;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.metrics {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 10px;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.metric-label {
+  font-size: 11px;
+  color: #777;
+  text-transform: uppercase;
+}
+
+.metric-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #e0e0e0;
+}
+
+.win-rate {
   color: #4da3ff;
 }
+
+.move {
+  font-size: 16px;
+  color: #e8c170;
+}
+
+.best-move {
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.curve-wrap {
+  margin-top: 8px;
+}
+
+.chart {
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.curve-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #555;
+  margin-top: 2px;
+}
+
 .hint {
   color: #ffd34d;
   font-size: 12px;
+  margin-top: 8px;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.empty {
+  text-align: center;
+}
+
+.empty-text {
+  color: #555;
+  font-size: 13px;
 }
 </style>
