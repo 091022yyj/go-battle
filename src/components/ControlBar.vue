@@ -28,12 +28,6 @@ const RULE_KOMI: Record<GoRules, number> = {
   ancient: 0,     // 古棋不贴目
 }
 
-const RULE_LABEL: Record<GoRules, string> = {
-  chinese: '中国规则',
-  japanese: '日韩规则',
-  ancient: '古棋（无贴目）',
-}
-
 // GTP config (saved to localStorage)
 const storedConfig = localStorage.getItem('gtp-config')
 const gtpConfig = ref<GTPConfig>(
@@ -54,6 +48,9 @@ const CONFIG_KEY = 'go-battle-config'
 
 // 键盘快捷键
 function onKeydown(e: KeyboardEvent) {
+  // 输入框/下拉框聚焦时忽略快捷键，避免打字触发新局/Pass/悔棋
+  const t = e.target as HTMLElement | null
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
   if (e.ctrlKey && e.key.toLowerCase() === 'z') {
     e.preventDefault()
     g.undo()
@@ -209,9 +206,20 @@ async function startGame() {
       const ai = createEngine(g.humanColor === 1 ? -1 : 1)
       e.startPve(g, ai)
     } else if (mode.value === 'evc') {
-      const black = createEngine(1)
-      const white = createEngine(-1)
-      e.startEvc(g, black, white)
+      if (engineType.value === 'kata-gtp') {
+        // EVS 双引擎共用同一 GTP 连接：桥接只有一份引擎棋盘，
+        // 两个独立连接各自增量同步历史会互相覆盖导致 illegal move。
+        // 共用实例后棋盘由同一份 syncedMoves 连续同步，天然正确。
+        const shared = createGTPEngine(1, gtpConfig.value)
+        shared.setLevel(level.value)
+        shared.setRules(rules.value, RULE_KOMI[rules.value])
+        shared.setStyle(style.value)
+        e.startEvc(g, shared, shared)
+      } else {
+        const black = createEngine(1)
+        const white = createEngine(-1)
+        e.startEvc(g, black, white)
+      }
     }
   } catch (err) {
     e.errorMessage = (err as Error).message
@@ -285,7 +293,7 @@ const engineStatusText = computed(() => {
         <label class="ctrl-label">
           <span class="label-text">棋力</span>
           <select v-model="level" @change="startGame">
-            <option v-for="l in 5" :key="l" :value="l">⭐ {{ l }}（{{ ['1秒','2秒','3秒','5秒','8秒'][l-1] }}）</option>
+            <option v-for="l in 5" :key="l" :value="l">⭐ {{ l }}（{{ ['1秒','2秒','3秒','4秒','5秒'][l-1] }}）</option>
           </select>
         </label>
 
@@ -339,7 +347,7 @@ const engineStatusText = computed(() => {
 
     <div class="control-group actions">
       <button class="btn btn-primary" @click="startGame">🔄 新局</button>
-      <button class="btn" @click="g.undo()" :disabled="g.state.history.length === 0">↩ 悔棋</button>
+      <button class="btn" @click="g.undo()" :disabled="g.state.history.length === 0 || g.mode === 'evc'">↩ 悔棋</button>
       <button class="btn" @click="g.passTurn()" :disabled="g.state.finished || !g.isHumanTurn">✋ Pass</button>
       <button class="btn" @click="g.resign()" :disabled="g.state.finished">🏳 认输</button>
       <button

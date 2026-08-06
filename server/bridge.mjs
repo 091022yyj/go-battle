@@ -135,6 +135,10 @@ function startEngine() {
     } else {
       // 非 =/? 行（kata-analyze 的 info 行等）→ 累积到响应正文
       if (currentId !== null) {
+        // 防御：响应缓冲超上限时截断，防止长分析/异常场景下无限增长崩溃
+        if (responseBuffer.length > 20_000_000) {
+          responseBuffer = responseBuffer.slice(-1_000_000)
+        }
         responseBuffer += (responseBuffer ? '\n' : '') + line
         // 流式命令：实时推送每一行给客户端
         const req = pendingRequests.get(currentId)
@@ -164,6 +168,8 @@ function startEngine() {
       req.reject(new Error('Engine process exited'))
     }
     pendingRequests.clear()
+    responseBuffer = ''
+    currentId = null
   })
 
   // 等待引擎响应：轮询 name 命令直到有响应
@@ -224,6 +230,17 @@ function stopEngine() {
   engineReady = false
 }
 
+// --- 命令队列：GTP 引擎一次只能处理一个命令 ---
+// 多浏览器连接（EVS 黑白双引擎/多标签页）并发发命令会互相覆盖
+// currentId/responseBuffer 导致响应串线。所有命令排队串行执行。
+let cmdQueue = Promise.resolve()
+// 每个连接最近的流式命令 id（kata-stop 用它精确打击自己的 analyze）
+const lastStreaming = new Map()
+// 被标记"执行时立即结束"的流式命令（其 kata-stop 在 analyze 排队期间就已到达）
+const pendingKill = new Set()
+// 已断开的连接：其排队中的命令直接跳过（防止旧连接的命令阻塞队列 60 秒）
+const cancelledConns = new Set()
+
 function sendCommand(cmd, argsList = [], opts = {}) {
   return new Promise((resolve, reject) => {
     if (!engineProc || (!engineReady && !opts.force)) {
@@ -232,6 +249,19 @@ function sendCommand(cmd, argsList = [], opts = {}) {
       console.log(`${t} ← ${cmd}${s} (REJECTED: engine not ready)`)
       return reject(new Error('Engine not ready'))
     }
+    cmdQueue = cmdQueue
+      .then(() => executeCommand(cmd, argsList, opts))
+      .then(resolve, reject)
+  })
+}
+
+function executeCommand(cmd, argsList, opts) {
+  return new Promise((resolve, reject) => {
+    // 发起连接已断开：跳过该命令（其响应无处可送），防止阻塞队列
+    if (opts.connId !== undefined && cancelledConns.has(opts.connId)) {
+      reject(new Error('connection closed'))
+      return
+    }
     const id = ++requestId
     currentId = id
     // 流式命令（kata-analyze 等）只在空行时结束；普通命令 30s 兜底
@@ -239,6 +269,11 @@ function sendCommand(cmd, argsList = [], opts = {}) {
     const timer = setTimeout(() => {
       if (pendingRequests.has(id)) {
         pendingRequests.delete(id)
+        // 超时后引擎可能仍输出（analyze 未停止），必须清空响应状态防泄漏
+        if (currentId === id) {
+          responseBuffer = ''
+          currentId = null
+        }
         const t = opts.connId ? `[conn-${opts.connId}]` : '[warmup]'
         console.log(`${t} → #${id} TIMEOUT after ${timeoutMs / 1000}s: ${cmd}`)
         reject(new Error(`GTP command timeout: ${cmd}`))
@@ -250,13 +285,38 @@ function sendCommand(cmd, argsList = [], opts = {}) {
     logCmd(opts.connId, cmd, argsList, !!opts.streaming)
     const gtpCmd = id + ' ' + cmd + (argsList.length ? ' ' + argsList.join(' ') : '')
     try {
-      engineProc.stdin.write(gtpCmd + '\n')
+      if (pendingKill.has(id)) {
+        // 该 analyze 的 kata-stop 在排队期间已到达：不真正启动搜索，直接写空行结束
+        pendingKill.delete(id)
+        engineProc.stdin.write('\n')
+      } else {
+        engineProc.stdin.write(gtpCmd + '\n')
+        if (opts.streaming && opts.connId !== undefined) lastStreaming.set(opts.connId, id)
+      }
     } catch (e) {
       clearTimeout(timer)
       pendingRequests.delete(id)
       reject(e)
     }
   })
+}
+
+/**
+ * kata-stop 不能走普通队列（kata-analyze 必须靠空行结束，排队会死锁）。
+ * 精确处理：若该连接的 analyze 正在执行 → 立即写空行打断；
+ * 若还在队列中等待 → 标记为"执行时立即结束"。
+ * 绝不写空行打断其他连接正在执行的命令。
+ */
+function handleKataStop(connId) {
+  const targetId = lastStreaming.get(connId)
+  if (targetId !== undefined && currentId === targetId && pendingRequests.has(targetId)) {
+    // 自己的 analyze 正在执行 → 打断
+    try { engineProc.stdin.write('\n') } catch {}
+  } else if (targetId !== undefined && pendingRequests.has(targetId)) {
+    // 自己的 analyze 还在排队 → 标记执行时立即结束
+    pendingKill.add(targetId)
+  }
+  return { ok: true, response: 'stopped' }
 }
 
 // --- WebSocket server ---
@@ -289,11 +349,10 @@ wss.on('connection', (ws) => {
       }
 
       if (cmd === 'kata-stop') {
-        // 停止当前流式分析：向引擎发送空行（KataGo GTP 分析协议）
+        // 停止当前流式分析：精确打断本连接的 kata-analyze（见 handleKataStop）
         console.log(`[conn-${connId}] ← kata-stop`)
         if (engineProc) {
-          engineProc.stdin.write('\n')
-          ws.send(JSON.stringify({ id, ok: true, response: 'stopped' }))
+          ws.send(JSON.stringify({ id, ...handleKataStop(connId) }))
         } else {
           ws.send(JSON.stringify({ id, ok: false, error: 'Engine not ready' }))
         }
@@ -318,6 +377,9 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     console.log(`[bridge] Browser disconnected (conn-${connId})`)
+    // 清理该连接的排队命令与流式记录，避免残留命令阻塞队列
+    cancelledConns.add(connId)
+    lastStreaming.delete(connId)
   })
 
   ws.on('error', (err) => {

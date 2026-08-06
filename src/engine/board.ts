@@ -194,6 +194,24 @@ export function undo(state: GameState): GameState {
     next.passCount = s2.passCount
   }
   next.history = state.history.slice(0, -1)
-  next.passCount = 0
+  // 注意：passCount 由重放自然得出（重放中的 pass 会递增、落子会清零），
+  // 不能强制清零——否则悔棋会丢失历史 pass 记录，导致终局判定错误。
   return next
+}
+
+/**
+ * 从历史重放重建局面（回放截断/悔棋后用于同步 stones/turn/ko/captured/passCount）。
+ */
+export function stateFromHistory(state: GameState, history: GameState['history']): GameState {
+  let s = createBoard(state.size)
+  for (const m of history) {
+    const s2 = m.point ? placeStone(s, m.point) : pass(s)
+    s.stones = s2.stones
+    s.turn = s2.turn
+    s.ko = s2.ko
+    s.captured = s2.captured
+    s.passCount = s2.passCount
+  }
+  s.history = history
+  return s
 }

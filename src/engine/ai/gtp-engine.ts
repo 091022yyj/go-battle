@@ -247,10 +247,13 @@ export class GTPEngine implements EngineAdapter {
     }
     for (let i = this.#syncedMoves; i < state.history.length; i++) {
       const m = state.history[i]
+      const color = m.player === 1 ? 'B' : 'W'
       if (m.point) {
-        const color = m.player === 1 ? 'B' : 'W'
         const coord = pointToGTP(m.point, state.size)
         await this.#send('play', [color, coord])
+      } else {
+        // pass 手也必须同步到引擎，否则引擎的轮次/打劫/目数全部错位
+        await this.#send('play', [color, 'pass'])
       }
     }
     this.#syncedMoves = state.history.length
@@ -373,7 +376,7 @@ export class GTPEngine implements EngineAdapter {
     color: string,
     seconds: number
   ): Promise<{ ok: boolean; response?: string; error?: string }> {
-    const resultPromise = this.#send(cmd, [color, String(seconds)], true)
+    const resultPromise = this.#send(cmd, [color, String(seconds)], { streaming: true })
     await new Promise((r) => setTimeout(r, seconds * 1000 + 500))
     try {
       await this.#send('kata-stop')

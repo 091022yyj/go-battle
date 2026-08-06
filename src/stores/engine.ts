@@ -41,6 +41,8 @@ export const useEngineStore = defineStore('engine', () => {
     const engine = g.state.turn === 1 ? black.value : white.value
     active.value = engine
     if (!engine) return
+    // 代次快照：await 期间若发生新局/悔棋/导入，丢弃本轮的迟到结果
+    const gen = g.generation
 
     timer = setTimeout(async () => {
       if (g.state.finished) return
@@ -57,10 +59,16 @@ export const useEngineStore = defineStore('engine', () => {
         }
 
         if (typeof liveEngine.genmoveLive === 'function') {
+          let lastMoveNum = -1
+          analysisStore.setRunning(true)
           move = await liveEngine.genmoveLive(g.state, (cands) => {
-            // 实时更新棋盘候选点 + 分析面板（胜率/目差）
+            // 候选点实时刷新（每行 info 都更新，保持棋盘动态）
             analysisStore.setCandidates(cands as never)
-            if (cands.length > 0) {
+            // 胜率/目差/曲线按"手数"去重——同一手只取最优快照，
+            // 避免流式每行都 push 导致曲线点爆炸
+            const moveNum = g.state.history.length + 1
+            if (cands.length > 0 && moveNum !== lastMoveNum) {
+              lastMoveNum = moveNum
               const best = cands[0]
               analysisStore.setAnalysis(
                 {
@@ -70,19 +78,23 @@ export const useEngineStore = defineStore('engine', () => {
                   variations: best.point ? [[{ player: g.state.turn, point: best.point }]] : [],
                   candidates: cands as never,
                 },
-                g.state.history.length + 1
+                moveNum
               )
             }
           })
+          analysisStore.setRunning(false)
         } else {
           // 普通引擎：genmove
           const movePromise = engine.genmove(g.state)
+          movePromise.catch(() => {}) // 竞态超时下的 rejection 不产生 unhandled 警告
           const timeoutPromise = new Promise<Move>((_, reject) =>
             setTimeout(() => reject(new Error('引擎思考超时（30秒）')), 30000)
           )
           move = await Promise.race([movePromise, timeoutPromise])
         }
 
+        // 代次校验：期间发生新局/悔棋/导入则丢弃
+        if (gen !== g.generation) return
         if (g.state.turn !== move.player) return
         g.playMove(move)
         analysisStore.clearCandidates()

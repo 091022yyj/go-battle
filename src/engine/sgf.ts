@@ -27,12 +27,16 @@ export function sgfToState(sgf: string): GameState {
   while ((m = moveRe.exec(sgf))) {
     const color = m[1] === 'B' ? 1 : -1
     const p = m[2]
-    if (p.length === 0 || p === 'tt') {
-      state = pass(state)
-    } else {
-      const point = sgfToPoint(p)
-      if (state.turn !== color) state = pass(state)
-      state = placeStone(state, point)
+    try {
+      if (p.length === 0 || p === 'tt') {
+        state = pass(state)
+      } else {
+        const point = sgfToPoint(p)
+        if (state.turn !== color) state = pass(state)
+        state = placeStone(state, point)
+      }
+    } catch {
+      // 非法/重复/终局后的着法：跳过该手，继续解析后续，避免导入崩溃
     }
   }
   return state

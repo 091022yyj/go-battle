@@ -20,14 +20,22 @@ function exportSGF() {
   URL.revokeObjectURL(url)
 }
 
-function onImport(e: Event) {
-  const input = e.target as HTMLInputElement
+function onImport(ev: Event) {
+  const input = ev.target as HTMLInputElement
   const f = input.files?.[0]
   if (!f) return
   const reader = new FileReader()
   reader.onload = () => {
-    g.importSGF(String(reader.result))
+    try {
+      g.importSGF(String(reader.result)) // 内部会停止引擎并清理分析
+    } catch (err) {
+      alert(`SGF 导入失败: ${(err as Error).message}`)
+    } finally {
+      // 重置 input 值，允许重复选择同一文件
+      input.value = ''
+    }
   }
+  reader.onerror = () => alert('SGF 文件读取失败')
   reader.readAsText(f)
 }
 </script>

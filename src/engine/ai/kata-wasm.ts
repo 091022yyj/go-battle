@@ -159,9 +159,11 @@ export class KataWasmEngine implements EngineAdapter {
       commands.push('clear_board')
 
       for (const m of state.history) {
+        const color = m.player === 1 ? 'B' : 'W'
         if (m.point) {
-          const color = m.player === 1 ? 'B' : 'W'
           commands.push(`play ${color} ${pointToGTP(m.point, state.size)}`)
+        } else {
+          commands.push(`play ${color} pass`)
         }
       }
 
@@ -199,9 +201,11 @@ export class KataWasmEngine implements EngineAdapter {
       commands.push('clear_board')
 
       for (const m of state.history) {
+        const color = m.player === 1 ? 'B' : 'W'
         if (m.point) {
-          const color = m.player === 1 ? 'B' : 'W'
           commands.push(`play ${color} ${pointToGTP(m.point, state.size)}`)
+        } else {
+          commands.push(`play ${color} pass`)
         }
       }
 
@@ -283,9 +287,11 @@ export class KataWasmEngine implements EngineAdapter {
     commands.push(`boardsize ${state.size}`)
     commands.push('clear_board')
     for (const m of state.history) {
+      const color = m.player === 1 ? 'B' : 'W'
       if (m.point) {
-        const color = m.player === 1 ? 'B' : 'W'
         commands.push(`play ${color} ${pointToGTP(m.point, state.size)}`)
+      } else {
+        commands.push(`play ${color} pass`)
       }
     }
     const color = state.turn === 1 ? 'B' : 'W'

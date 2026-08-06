@@ -16,7 +16,7 @@ export const useAnalysisStore = defineStore('analysis', {
   actions: {
     setAnalysis(a: Analysis, moveNumber: number) {
       this.latest = a
-      this.running = false
+      // running 由调用方控制（思考开始置 true，结束置 false）
       this.push({ moveNumber, winRate: a.winRate })
     },
     setCandidates(c: CandidateMove[]) {

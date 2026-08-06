@@ -40,15 +40,17 @@ function handleClick(e: MouseEvent) {
 }
 
 // Detect new moves and captures for animation
-watch(() => g.state.history.length, (len) => {
+watch(() => g.state.history.length, (len, old) => {
+  if (len <= old) return // 悔棋/回退不播动画
   const now = performance.now()
-  const last = g.state.history[len - 1]
+  const board = g.displayState
+  const last = board.history[len - 1]
 
   // Detect captured stones by comparing previous and current stones
-  if (prevStones.length === g.state.stones.length) {
+  if (prevStones.length === board.stones.length) {
     const captured: { x: number; y: number; startTime: number }[] = []
-    for (let i = 0; i < g.state.stones.length; i++) {
-      if (prevStones[i] !== 0 && g.state.stones[i] === 0) {
+    for (let i = 0; i < board.stones.length; i++) {
+      if (prevStones[i] !== 0 && board.stones[i] === 0) {
         captured.push({
           x: i % g.size,
           y: Math.floor(i / g.size),
@@ -69,13 +71,27 @@ watch(() => g.state.history.length, (len) => {
     passIndicator.value = { startTime: now, player: last.player }
   }
 
-  prevStones = [...g.state.stones]
+  prevStones = [...board.stones]
 })
+
+// 新局/悔棋/导入/回放截断（state 引用变化）时重置动画状态与提子对比基线
+watch(
+  () => g.state,
+  (s, old) => {
+    if (s !== old) {
+      prevStones = []
+      animatingStone.value = null
+      capturedStones.value = []
+      passIndicator.value = null
+    }
+  }
+)
 
 function draw() {
   const canvasEl = canvas.value
   if (!canvasEl || !ctx) return
   const n = g.size
+  const board = g.displayState // 回放视图：悔棋/跳转后只显示到游标位置
   const w = MARGIN * 2 + (n - 1) * CELL
   const h = MARGIN * 2 + (n - 1) * CELL
   canvasEl.width = w
@@ -162,8 +178,8 @@ function draw() {
     animProgress = 1 - Math.pow(1 - animProgress, 3)
   }
 
-  for (let i = 0; i < g.state.stones.length; i++) {
-    const c = g.state.stones[i]
+  for (let i = 0; i < board.stones.length; i++) {
+    const c = board.stones[i]
     if (c === 0) continue
     const x = i % n
     const y = Math.floor(i / n)
@@ -176,7 +192,7 @@ function draw() {
 
   // Draw animating stone
   if (isAnimating && animPoint) {
-    const c = g.state.stones[animPoint.y * n + animPoint.x]
+    const c = board.stones[animPoint.y * n + animPoint.x]
     if (c !== 0) {
       drawStone(animPoint.x, animPoint.y, c, animProgress)
     }
@@ -185,11 +201,11 @@ function draw() {
   }
 
   // AI 思考候选点（实心圆点 + 胜率百分比）
-  if (analysis.candidates.length > 0 && !g.state.finished) {
+  if (analysis.candidates.length > 0 && !board.finished) {
     for (const c of analysis.candidates) {
       if (!c.point || c.point.x >= n || c.point.y >= n) continue
       const p = toCanvasPoint(c.point)
-      const isOccupied = g.state.stones[c.point.y * n + c.point.x] !== 0
+      const isOccupied = board.stones[c.point.y * n + c.point.x] !== 0
       if (isOccupied) continue
 
       // 圆点：胜率越高越大越红
@@ -218,7 +234,7 @@ function draw() {
   }
 
   // Last move marker (pulse)
-  const last = g.state.history[g.state.history.length - 1]
+  const last = board.history[board.history.length - 1]
   if (last?.point && (!isAnimating || (animPoint && (last.point.x !== animPoint.x || last.point.y !== animPoint.y)))) {
     const p = toCanvasPoint(last.point)
     const pulse = 1 + Math.sin(now * 0.005) * 0.3
@@ -283,10 +299,6 @@ function renderLoop() {
   draw()
   raf = requestAnimationFrame(renderLoop)
 }
-
-watch(() => [g.size], () => {
-  prevStones = []
-})
 
 onMounted(() => {
   ctx = canvas.value?.getContext('2d') ?? null

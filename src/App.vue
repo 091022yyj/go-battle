@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, watch, ref } from 'vue'
+import { computed, watch } from 'vue'
 import GoBoard from './components/GoBoard.vue'
 import ControlBar from './components/ControlBar.vue'
 import AnalysisPanel from './components/AnalysisPanel.vue'
