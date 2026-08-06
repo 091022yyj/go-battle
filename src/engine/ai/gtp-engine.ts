@@ -151,25 +151,36 @@ export class GTPEngine implements EngineAdapter {
       }
 
       ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data)
-          // 流式行：转发给 onLine 回调
-          if (msg.streaming && msg.line !== undefined) {
-            const req = this.#pending.get(msg.id)
-            if (req?.onLine) req.onLine(msg.line)
-            return
-          }
-          const req = this.#pending.get(msg.id)
-          if (req) {
-            this.#pending.delete(msg.id)
-            if (msg.ok) {
-              req.resolve(msg)
-            } else {
-              req.reject(new Error(msg.error || 'GTP error'))
+        // 防御：某些环境文本帧可能以 Blob 形式到达
+        const raw = event.data
+        const parse = (text: string) => {
+          try {
+            const msg = JSON.parse(text)
+            // 流式行：转发给 onLine 回调
+            if (msg.streaming && msg.line !== undefined) {
+              const req = this.#pending.get(msg.id)
+              if (req?.onLine) req.onLine(msg.line)
+              return
             }
+            const req = this.#pending.get(msg.id)
+            if (req) {
+              this.#pending.delete(msg.id)
+              if (msg.ok) {
+                req.resolve(msg)
+              } else {
+                req.reject(new Error(msg.error || 'GTP error'))
+              }
+            }
+          } catch {
+            // ignore parse errors
           }
-        } catch {
-          // ignore parse errors
+        }
+        if (typeof raw === 'string') {
+          parse(raw)
+        } else if (raw instanceof Blob) {
+          raw.text().then(parse).catch(() => {})
+        } else {
+          parse(String(raw))
         }
       }
     })
@@ -220,18 +231,29 @@ export class GTPEngine implements EngineAdapter {
     })
   }
 
-  async #replayHistory(state: GameState): Promise<void> {
-    await this.#send('boardsize', [String(state.size)])
-    await this.#send('clear_board')
-    await this.#send('komi', [String(this.#komi)])
+  #syncedMoves = 0
 
-    for (const m of state.history) {
+  /**
+   * 同步棋盘历史到引擎（增量优化：只补发新增手数）。
+   * 历史被截断（悔棋/回放）时完全重放。
+   */
+  async #replayHistory(state: GameState): Promise<void> {
+    const full = state.history.length < this.#syncedMoves
+    if (full) {
+      await this.#send('boardsize', [String(state.size)])
+      await this.#send('clear_board')
+      await this.#send('komi', [String(this.#komi)])
+      this.#syncedMoves = 0
+    }
+    for (let i = this.#syncedMoves; i < state.history.length; i++) {
+      const m = state.history[i]
       if (m.point) {
         const color = m.player === 1 ? 'B' : 'W'
         const coord = pointToGTP(m.point, state.size)
         await this.#send('play', [color, coord])
       }
     }
+    this.#syncedMoves = state.history.length
   }
 
   async genmove(state: GameState): Promise<Move> {
@@ -273,6 +295,7 @@ export class GTPEngine implements EngineAdapter {
     const color = state.turn === 1 ? 'B' : 'W'
     const analyzeCmd = this.#config.engineName === 'sayuri' ? 'analyze' : 'kata-analyze'
     const seconds = LEVEL_SECONDS[this.#level - 1] || 3
+    let lastCands: CandidateMove[] = []
 
     try {
       const resultPromise = this.#send(analyzeCmd, [color, String(seconds)], {
@@ -280,7 +303,8 @@ export class GTPEngine implements EngineAdapter {
         onLine: (line) => {
           if (line.startsWith('info')) {
             try {
-              onUpdate?.(this.#parseInfoLines(line, state.size))
+              lastCands = this.#parseInfoLines(line, state.size)
+              onUpdate?.(lastCands)
             } catch {
               // 解析失败忽略
             }
@@ -293,9 +317,19 @@ export class GTPEngine implements EngineAdapter {
         this.#send('kata-stop').catch(() => {})
       }, seconds * 1000 + 300)
 
-      const result = await resultPromise
+      // 兜底：分析超时（kata-stop 偶发失败时）也不无限等待，
+      // 用最后一次流式快照的最佳着法落子
+      const timeoutMs = seconds * 1000 + 10000
+      const result = await Promise.race([
+        resultPromise,
+        new Promise<{ ok: boolean; response?: string }>((resolve) =>
+          setTimeout(() => resolve({ ok: true, response: '' }), timeoutMs)
+        ),
+      ])
+
       const cands = this.#parseInfoLines(result.response || '', state.size)
-      const best = cands[0]
+      const merged = cands.length > 0 ? cands : lastCands
+      const best = merged[0]
       this.status = 'idle'
       return { player: state.turn, point: best ? best.point : null }
     } catch (err) {
@@ -332,7 +366,7 @@ export class GTPEngine implements EngineAdapter {
 
   /**
    * KataGo GTP 分析协议：kata-analyze 持续输出 info 行，
-   * 需发送空行（kata-stop）结束分析。
+   * 需发送空行（kata-stop）结束分析。带兜底超时防卡死。
    */
   async #analyzeWithStop(
     cmd: string,
@@ -346,7 +380,12 @@ export class GTPEngine implements EngineAdapter {
     } catch {
       // 引擎可能已自行结束
     }
-    return resultPromise
+    return Promise.race([
+      resultPromise,
+      new Promise<{ ok: boolean; response?: string }>((resolve) =>
+        setTimeout(() => resolve({ ok: true, response: '' }), seconds * 1000 + 10000)
+      ),
+    ])
   }
 
   /**

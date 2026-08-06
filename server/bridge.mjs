@@ -143,15 +143,15 @@ function startEngine() {
     pendingRequests.clear()
   })
 
-  // 等待引擎真正就绪：轮询 name 命令直到有响应
+  // 等待引擎响应：轮询 name 命令直到有响应
   // （KataGo 首次启动需 10-30 秒初始化 GPU + 加载模型）
+  // 注意：预热完成前 engineReady 保持 false，浏览器请求会收到明确错误而非排队卡住
   const checkReady = async () => {
     if (!engineProc) return
     try {
       const resp = await sendCommand('name', [], { force: true })
       if (resp.ok) {
-        engineReady = true
-        console.log('[bridge] Engine ready:', resp.response || '')
+        console.log('[bridge] Engine responding, starting warmup...')
         warmupEngine()
         return
       }
@@ -162,7 +162,8 @@ function startEngine() {
   }
 
   // 预热：OpenCL 后端首次搜索需编译 kernel（可能 30-60 秒），
-  // 启动后先跑一次较长分析让 kernel 完全编译，避免首局极慢
+  // 启动后先跑一次较长分析让 kernel 完全编译，避免首局极慢。
+  // 预热完成后才标记引擎就绪。
   const warmupEngine = async () => {
     try {
       console.log('[bridge] Warming up engine (kernel compile)...')
@@ -172,9 +173,11 @@ function startEngine() {
       await new Promise((r) => setTimeout(r, 8500))
       try { engineProc?.stdin.write('\n') } catch {}
       await p
-      console.log('[bridge] Warmup complete')
+      engineReady = true
+      console.log('[bridge] Warmup complete, engine ready')
     } catch (e) {
       console.log('[bridge] Warmup failed:', e.message)
+      engineReady = true
     }
   }
 
