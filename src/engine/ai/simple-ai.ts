@@ -16,35 +16,35 @@ export class SimpleAI implements EngineAdapter {
   name = 'simple-ai'
   engineType = 'simple' as const
   status: 'idle' | 'thinking' | 'error' = 'idle'
-  private level = 1
-  private stopped = false
+  #level = 1
+  #stopped = false
+  #player: Player
 
-  constructor(private player: Player, level = 1) {
+  constructor(player: Player, level = 1) {
+    this.#player = player
     this.setLevel(level)
   }
 
   setLevel(level: number): void {
-    this.level = Math.max(1, Math.min(5, level))
+    this.#level = Math.max(1, Math.min(5, level))
   }
 
   stop(): void {
-    this.stopped = true
+    this.#stopped = true
   }
 
   dispose(): void {
-    this.stopped = true
+    this.#stopped = true
   }
 
-  private scoreMove(state: GameState, p: { x: number; y: number }): number {
+  #scoreMove(state: GameState, p: { x: number; y: number }): number {
     const player = state.turn
     let score = 0
 
-    // Check if this move captures opponent stones
     const simStones = [...state.stones]
     simStones[indexOf(state, p)] = player
     for (const q of neighbors(state, p)) {
       if (simStones[indexOf(state, q)] === opponent(player)) {
-        // Check if this opponent group has 0 liberties after our move
         const visited = new Set<number>()
         const queue: number[] = [indexOf(state, q)]
         visited.add(indexOf(state, q))
@@ -64,11 +64,10 @@ export class SimpleAI implements EngineAdapter {
             }
           }
         }
-        if (!hasLiberty) score += groupSize * 1000 // Capture!
+        if (!hasLiberty) score += groupSize * 1000
       }
     }
 
-    // Check if this move puts opponent in atari (1 liberty)
     for (const q of neighbors(state, p)) {
       if (simStones[indexOf(state, q)] === opponent(player)) {
         const visited = new Set<number>()
@@ -88,22 +87,20 @@ export class SimpleAI implements EngineAdapter {
             }
           }
         }
-        if (libs.size === 1) score += 200 // Atari
+        if (libs.size === 1) score += 200
       }
     }
 
-    // Positional: prefer center-ish
     const center = (state.size - 1) / 2
     const d = Math.abs(p.x - center) + Math.abs(p.y - center)
     score += (state.size - d) * 0.1
 
-    // Very slight edge bonus for 3-3 and 4-4 points
     if ((p.x === 2 || p.x === state.size - 3) && (p.y === 2 || p.y === state.size - 3)) score += 2
 
     return score
   }
 
-  private simulateOnce(state: GameState): number {
+  #simulateOnce(state: GameState): number {
     let s = state
     const limit = Math.min(state.size * state.size, 50)
     for (let i = 0; i < limit && !s.finished; i++) {
@@ -120,30 +117,29 @@ export class SimpleAI implements EngineAdapter {
       if (c === 1) black++
       else if (c === -1) white++
     }
-    return this.player === 1 ? black - white : white - black
+    return this.#player === 1 ? black - white : white - black
   }
 
   async genmove(state: GameState): Promise<Move> {
     this.status = 'thinking'
-    this.stopped = false
+    this.#stopped = false
     const moves = legalMoves(state)
     if (moves.length === 0) {
       this.status = 'idle'
       return { player: state.turn, point: null }
     }
 
-    // Level determines sim count: 3/6/9/12/15
-    const sims = Math.max(1, this.level * 3)
+    const sims = Math.max(1, this.#level * 3)
 
     let best = moves[0]
     let bestScore = -Infinity
 
     for (const p of moves) {
-      if (this.stopped) break
+      if (this.#stopped) break
       const next = placeStone(state, p)
       let total = 0
-      for (let i = 0; i < sims; i++) total += this.simulateOnce(next)
-      const score = this.scoreMove(state, p) + total / Math.max(1, sims)
+      for (let i = 0; i < sims; i++) total += this.#simulateOnce(next)
+      const score = this.#scoreMove(state, p) + total / Math.max(1, sims)
       if (score > bestScore) {
         bestScore = score
         best = p
@@ -159,7 +155,7 @@ export class SimpleAI implements EngineAdapter {
     let win = 0
     const sims = 20
     for (let i = 0; i < sims; i++) {
-      if (this.simulateOnce(next) > 0) win++
+      if (this.#simulateOnce(next) > 0) win++
     }
     const winRate = win / sims
     return {

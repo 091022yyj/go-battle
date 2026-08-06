@@ -1,4 +1,4 @@
-import type { Color, GameState, Move, Player, Point } from './types'
+import type { Color, GameState, Player, Point } from './types'
 
 const NEIGHBORS: ReadonlyArray<readonly [number, number]> = [
   [1, 0],
