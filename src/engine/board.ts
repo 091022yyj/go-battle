@@ -75,3 +75,108 @@ export function getLiberties(state: GameState, group: Point[]): Set<number> {
 export function opponent(player: Player): Player {
   return player === 1 ? -1 : 1
 }
+
+export function placeStone(state: GameState, point: Point): GameState {
+  if (state.finished) throw new Error('game over')
+  if (!state.inBounds(point)) throw new Error('out of bounds')
+  const i = indexOf(state, point)
+  if (state.stones[i] !== 0) throw new Error('occupied')
+  if (!isLegalMove(state, point)) throw new Error('illegal move')
+
+  const player = state.turn
+  const stones = [...state.stones]
+  const captured = { ...state.captured }
+  let ko: Point | null = null
+
+  stones[i] = player
+
+  const removed: Point[] = []
+  for (const q of neighbors(state, point)) {
+    if (stones[indexOf(state, q)] === opponent(player)) {
+      const group = getGroup({ ...state, stones }, q)
+      if (getLiberties({ ...state, stones }, group).size === 0) {
+        for (const g of group) {
+          stones[indexOf(state, g)] = 0
+          removed.push(g)
+        }
+      }
+    }
+  }
+
+  const ownGroup = getGroup({ ...state, stones }, point)
+  if (getLiberties({ ...state, stones }, ownGroup).size === 0) {
+    throw new Error('suicide')
+  }
+
+  if (removed.length === 1) {
+    const victim = removed[0]
+    const before = state.stones
+    const after = stones
+    let identical = true
+    for (let k = 0; k < before.length; k++) {
+      if (k === i || k === indexOf(state, victim)) continue
+      if (before[k] !== after[k]) {
+        identical = false
+        break
+      }
+    }
+    if (identical) ko = victim
+  }
+
+  if (player === 1) captured.black += removed.length
+  else captured.white += removed.length
+
+  const next: GameState = {
+    size: state.size,
+    stones,
+    turn: opponent(player),
+    ko,
+    captured,
+    history: [...state.history, { player, point }],
+    passCount: 0,
+    finished: false,
+    inBounds: state.inBounds,
+  }
+
+  return next
+}
+
+export function isLegalMove(state: GameState, point: Point): boolean {
+  if (state.finished) return false
+  if (!state.inBounds(point)) return false
+  const i = indexOf(state, point)
+  if (state.stones[i] !== 0) return false
+  if (state.ko && state.ko.x === point.x && state.ko.y === point.y) return false
+
+  const player = state.turn
+  const stones = [...state.stones]
+  stones[i] = player
+
+  let captures = false
+  for (const q of neighbors(state, point)) {
+    if (stones[indexOf(state, q)] === opponent(player)) {
+      const group = getGroup({ ...state, stones }, q)
+      if (getLiberties({ ...state, stones }, group).size === 0) captures = true
+    }
+  }
+  if (captures) return true
+
+  const ownGroup = getGroup({ ...state, stones }, point)
+  return getLiberties({ ...state, stones }, ownGroup).size > 0
+}
+
+export function pass(state: GameState): GameState {
+  if (state.finished) throw new Error('game over')
+  const player = state.turn
+  const passCount = state.passCount + 1
+  const finished = passCount >= 2
+  return {
+    ...state,
+    turn: opponent(player),
+    ko: null,
+    history: [...state.history, { player, point: null }],
+    passCount,
+    finished,
+    inBounds: state.inBounds,
+  }
+}
