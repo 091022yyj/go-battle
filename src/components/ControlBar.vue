@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useGameStore } from '../stores/game'
 import { useEngineStore } from '../stores/engine'
 import { useAnalysisStore } from '../stores/analysis'
 import { createSimpleAI } from '../engine/ai/simple-ai'
-import { createGTPEngine, type GTPConfig } from '../engine/ai/gtp-engine'
+import { createGTPEngine, type GTPConfig, type GoRules, type GoStyle } from '../engine/ai/gtp-engine'
 import { KataWasmEngine } from '../engine/ai/kata-wasm'
 import type { EngineAdapter } from '../engine/types'
 
@@ -16,7 +16,23 @@ const size = ref(19)
 const mode = ref<'pve' | 'evc'>('pve')
 const humanColor = ref<1 | -1>(1)
 const level = ref(3)
-const engineType = ref<'simple' | 'kata-wasm' | 'kata-gtp'>('simple')
+const engineType = ref<'simple' | 'kata-wasm' | 'kata-gtp'>('kata-gtp')
+const rules = ref<GoRules>('chinese')
+const style = ref<GoStyle>('balanced')
+const evsPaused = ref(false)
+
+// 规则 → 贴目（目）
+const RULE_KOMI: Record<GoRules, number> = {
+  chinese: 7.5,   // 中国规则贴 7.5 目（数子 3.75 子）
+  japanese: 6.5,  // 日韩规则贴 6.5 目
+  ancient: 0,     // 古棋不贴目
+}
+
+const RULE_LABEL: Record<GoRules, string> = {
+  chinese: '中国规则',
+  japanese: '日韩规则',
+  ancient: '古棋（无贴目）',
+}
 
 // GTP config (saved to localStorage)
 const storedConfig = localStorage.getItem('gtp-config')
@@ -31,6 +47,81 @@ function saveGTPConfig() {
 }
 
 const gtpStatus = ref<'disconnected' | 'connecting' | 'connected'>('disconnected')
+const hintLoading = ref(false)
+
+// 键盘快捷键
+function onKeydown(e: KeyboardEvent) {
+  if (e.ctrlKey && e.key.toLowerCase() === 'z') {
+    e.preventDefault()
+    g.undo()
+  } else if (e.key.toLowerCase() === 'n') {
+    startGame()
+  } else if (e.key.toLowerCase() === 'p') {
+    g.passTurn()
+  }
+}
+function onNewGameEvent() {
+  startGame()
+}
+onMounted(() => {
+  window.addEventListener('keydown', onKeydown)
+  window.addEventListener('go-battle:new-game', onNewGameEvent)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('go-battle:new-game', onNewGameEvent)
+})
+
+/** 最佳着法提示：AI 分析当前局面并显示候选点 */
+async function showHint() {
+  if (hintLoading.value) return
+  const engine = g.humanColor === 1 ? e.white : e.black
+  if (!engine) return
+  hintLoading.value = true
+  try {
+    const candidatesEngine = engine as unknown as {
+      getCandidates?: (s: unknown, seconds?: number) => Promise<unknown[]>
+    }
+    if (typeof candidatesEngine.getCandidates === 'function') {
+      const cands = await candidatesEngine.getCandidates(g.state, 2)
+      a.setCandidates(cands as never)
+      if (cands.length > 0) {
+        const best = cands[0] as { point: { x: number; y: number } | null; winRate: number; scoreLead: number }
+        a.setAnalysis(
+          {
+            score: best.scoreLead,
+            winRate: best.winRate,
+            bestMove: { player: g.state.turn, point: best.point },
+            variations: best.point ? [[{ player: g.state.turn, point: best.point }]] : [],
+            candidates: cands as never,
+          },
+          g.state.history.length + 1
+        )
+      }
+    } else {
+      const analysis = await engine.analyze(g.state)
+      a.setAnalysis(analysis, g.state.history.length + 1)
+      a.setCandidates(analysis.candidates ?? [])
+    }
+  } catch (err) {
+    e.errorMessage = `分析失败: ${(err as Error).message}`
+  } finally {
+    hintLoading.value = false
+  }
+}
+
+/** EVS 暂停/继续 */
+function toggleEvs() {
+  if (evsPaused.value) {
+    evsPaused.value = false
+    if (g.mode === 'evc' && !g.state.finished) {
+      e.restartEngine(g as never, g.state.turn)
+    }
+  } else {
+    evsPaused.value = true
+    e.stop()
+  }
+}
 
 async function testGTPConnection() {
   gtpStatus.value = 'connecting'
@@ -47,25 +138,34 @@ async function testGTPConnection() {
 }
 
 function createEngine(player: 1 | -1): EngineAdapter {
+  let engine: EngineAdapter
   switch (engineType.value) {
     case 'simple': {
-      const ai = createSimpleAI(player)
-      ai.setLevel(level.value)
-      return ai
+      engine = createSimpleAI(player)
+      engine.setLevel(level.value)
+      break
     }
     case 'kata-wasm': {
-      return new KataWasmEngine()
+      engine = new KataWasmEngine()
+      break
     }
     case 'kata-gtp': {
-      return createGTPEngine(player, gtpConfig.value)
+      const gtp = createGTPEngine(player, gtpConfig.value)
+      gtp.setLevel(level.value)
+      gtp.setRules(rules.value, RULE_KOMI[rules.value])
+      gtp.setStyle(style.value)
+      engine = gtp
+      break
     }
   }
+  return engine
 }
 
 async function startGame() {
   e.stop()
   a.reset()
-  g.newGame(size.value, mode.value, 3.75)
+  evsPaused.value = false
+  g.newGame(size.value, mode.value, RULE_KOMI[rules.value])
 
   try {
     if (mode.value === 'pve') {
@@ -144,6 +244,33 @@ const engineStatusText = computed(() => {
           <option v-for="l in 5" :key="l" :value="l">⭐ {{ l }}</option>
         </select>
       </label>
+
+      <template v-if="engineType !== 'simple'">
+        <label class="ctrl-label">
+          <span class="label-text">棋力</span>
+          <select v-model="level" @change="startGame">
+            <option v-for="l in 5" :key="l" :value="l">⭐ {{ l }}（{{ ['1秒','2秒','3秒','5秒','8秒'][l-1] }}）</option>
+          </select>
+        </label>
+
+        <label class="ctrl-label">
+          <span class="label-text">规则</span>
+          <select v-model="rules" @change="startGame">
+            <option value="chinese">中国规则 贴7.5</option>
+            <option value="japanese">日韩规则 贴6.5</option>
+            <option value="ancient">古棋 无贴目</option>
+          </select>
+        </label>
+
+        <label class="ctrl-label">
+          <span class="label-text">棋风</span>
+          <select v-model="style" @change="startGame">
+            <option value="balanced">⚖️ 均衡</option>
+            <option value="solid">🛡️ 稳健</option>
+            <option value="aggressive">⚔️ 激进</option>
+          </select>
+        </label>
+      </template>
     </div>
 
     <!-- GTP Config Panel -->
@@ -178,7 +305,18 @@ const engineStatusText = computed(() => {
       <button class="btn btn-primary" @click="startGame">🔄 新局</button>
       <button class="btn" @click="g.undo()" :disabled="g.state.history.length === 0">↩ 悔棋</button>
       <button class="btn" @click="g.passTurn()" :disabled="g.state.finished || !g.isHumanTurn">✋ Pass</button>
-      <button class="btn btn-danger" @click="g.resign()" :disabled="g.state.finished">🏳 认输</button>
+      <button class="btn" @click="g.resign()" :disabled="g.state.finished">🏳 认输</button>
+      <button
+        v-if="mode === 'pve' && g.isHumanTurn && !g.state.finished"
+        class="btn btn-hint"
+        @click="showHint"
+        :disabled="hintLoading"
+      >
+        💡 {{ hintLoading ? '分析中...' : '最佳着法' }}
+      </button>
+      <button v-if="mode === 'evc' && !g.state.finished" class="btn" @click="toggleEvs">
+        {{ evsPaused ? '▶ 继续' : '⏸ 暂停' }}
+      </button>
       <span v-if="engineStatusText" class="engine-status">{{ engineStatusText }}</span>
     </div>
   </div>
@@ -292,6 +430,15 @@ select:focus, input:focus {
 
 .btn-danger:hover:not(:disabled) {
   background: rgba(255,100,100,0.15);
+}
+
+.btn-hint {
+  border-color: rgba(77,163,255,0.35);
+  color: #4da3ff;
+}
+
+.btn-hint:hover:not(:disabled) {
+  background: rgba(77,163,255,0.15);
 }
 
 .actions {

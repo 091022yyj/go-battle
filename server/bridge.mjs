@@ -113,6 +113,11 @@ function startEngine() {
       // 非 =/? 行（kata-analyze 的 info 行等）→ 累积到响应正文
       if (currentId !== null) {
         responseBuffer += (responseBuffer ? '\n' : '') + line
+        // 流式命令：实时推送每一行给客户端
+        const req = pendingRequests.get(currentId)
+        if (req && req.streaming && req.onLine) {
+          req.onLine(line)
+        }
       }
     }
   })
@@ -147,6 +152,7 @@ function startEngine() {
       if (resp.ok) {
         engineReady = true
         console.log('[bridge] Engine ready:', resp.response || '')
+        warmupEngine()
         return
       }
       setTimeout(checkReady, 2000)
@@ -154,6 +160,24 @@ function startEngine() {
       setTimeout(checkReady, 2000)
     }
   }
+
+  // 预热：OpenCL 后端首次搜索需编译 kernel（可能 30-60 秒），
+  // 启动后先跑一次较长分析让 kernel 完全编译，避免首局极慢
+  const warmupEngine = async () => {
+    try {
+      console.log('[bridge] Warming up engine (kernel compile)...')
+      await sendCommand('boardsize', ['9'], { force: true })
+      await sendCommand('clear_board', [], { force: true })
+      const p = sendCommand('kata-analyze', ['B', '8'], { force: true, streaming: true })
+      await new Promise((r) => setTimeout(r, 8500))
+      try { engineProc?.stdin.write('\n') } catch {}
+      await p
+      console.log('[bridge] Warmup complete')
+    } catch (e) {
+      console.log('[bridge] Warmup failed:', e.message)
+    }
+  }
+
   setTimeout(checkReady, 3000)
 }
 
@@ -188,7 +212,7 @@ function sendCommand(cmd, argsList = [], opts = {}) {
       }
     }, timeoutMs)
 
-    pendingRequests.set(id, { resolve, reject, timer, streaming: !!opts.streaming })
+    pendingRequests.set(id, { resolve, reject, timer, streaming: !!opts.streaming, onLine: opts.onLine })
 
     const gtpCmd = id + ' ' + cmd + (argsList.length ? ' ' + argsList.join(' ') : '')
     try {
@@ -240,8 +264,16 @@ wss.on('connection', (ws) => {
         return
       }
 
-      const result = await sendCommand(cmd, cmdArgs || [], { streaming })
-      ws.send(JSON.stringify({ id, ok: result.ok, response: result.response, error: result.error }))
+      // 流式命令：实时转发引擎输出的每一行
+      const result = await sendCommand(cmd, cmdArgs || [], {
+        streaming,
+        onLine: streaming
+          ? (line) => {
+              ws.send(JSON.stringify({ id, ok: true, streaming: true, line }))
+            }
+          : undefined,
+      })
+      ws.send(JSON.stringify({ id, ok: result.ok, done: true, response: result.response, error: result.error }))
     } catch (err) {
       ws.send(JSON.stringify({ id, ok: false, error: err.message }))
     }

@@ -19,7 +19,14 @@ const bestMoveText = computed(() => {
 const scoreText = computed(() => {
   if (!a.latest) return '—'
   const s = a.latest.score
-  return s > 0 ? `+${s.toFixed(1)}` : s.toFixed(1)
+  return s > 0 ? `+${s.toFixed(1)} 目` : `${s.toFixed(1)} 目`
+})
+
+// 目差条：黑方视角，正值 = 黑优
+const leadBarPercent = computed(() => {
+  if (!a.latest) return 50
+  const s = Math.max(-30, Math.min(30, a.latest.score))
+  return 50 + (s / 30) * 50
 })
 
 function curveSvg(): string {
@@ -51,8 +58,19 @@ function curveSvg(): string {
         <span class="metric-value win-rate">{{ winRateText }}</span>
       </div>
       <div class="metric">
-        <span class="metric-label">评分</span>
-        <span class="metric-value">{{ scoreText }}</span>
+        <span class="metric-label">目差</span>
+        <span class="metric-value lead" :class="{ 'lead-good': (a.latest?.score ?? 0) > 0 }">{{ scoreText }}</span>
+      </div>
+    </div>
+    <!-- 目差条（黑方视角） -->
+    <div class="lead-bar-wrap" v-if="a.latest">
+      <div class="lead-bar">
+        <div class="lead-bar-fill" :style="{ width: leadBarPercent + '%' }"></div>
+        <div class="lead-bar-center"></div>
+      </div>
+      <div class="lead-labels">
+        <span>黑优</span>
+        <span>白优</span>
       </div>
     </div>
     <div class="best-move">
@@ -118,6 +136,53 @@ function curveSvg(): string {
 
 .win-rate {
   color: #4da3ff;
+}
+
+.lead {
+  color: #aaa;
+}
+
+.lead-good {
+  color: #ffd34d;
+}
+
+.lead-bar-wrap {
+  margin-bottom: 10px;
+}
+
+.lead-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, rgba(120,120,120,0.3), rgba(255,255,255,0.15), rgba(220,220,220,0.3));
+  overflow: hidden;
+}
+
+.lead-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, rgba(255,211,77,0.9), rgba(77,163,255,0.9));
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.lead-bar-center {
+  position: absolute;
+  left: 50%;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  background: rgba(255,255,255,0.5);
+}
+
+.lead-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #555;
+  margin-top: 2px;
 }
 
 .move {

@@ -45,17 +45,20 @@ export const useEngineStore = defineStore('engine', () => {
     timer = setTimeout(async () => {
       if (g.state.finished) return
       try {
-        // 思考前先获取候选着法（棋盘候选点 + 分析面板同时更新，失败不阻断）
-        const candidatesEngine = engine as unknown as {
-          getCandidates?: (
+        let move: Move
+        const analysisStore = useAnalysisStore()
+
+        // 支持实时分析的引擎：kata-analyze 边思考边推送候选/胜率/目差
+        const liveEngine = engine as unknown as {
+          genmoveLive?: (
             s: GameStore['state'],
-            seconds?: number
-          ) => Promise<{ point: { x: number; y: number } | null; winRate: number; scoreLead: number }[]>
+            onUpdate?: (cands: { point: { x: number; y: number } | null; winRate: number; scoreLead: number }[]) => void
+          ) => Promise<Move>
         }
-        if (typeof candidatesEngine.getCandidates === 'function') {
-          try {
-            const analysisStore = useAnalysisStore()
-            const cands = await candidatesEngine.getCandidates(g.state, 2)
+
+        if (typeof liveEngine.genmoveLive === 'function') {
+          move = await liveEngine.genmoveLive(g.state, (cands) => {
+            // 实时更新棋盘候选点 + 分析面板（胜率/目差）
             analysisStore.setCandidates(cands as never)
             if (cands.length > 0) {
               const best = cands[0]
@@ -70,22 +73,19 @@ export const useEngineStore = defineStore('engine', () => {
                 g.state.history.length + 1
               )
             }
-          } catch {
-            // 候选获取失败不影响正式着法
-          }
+          })
+        } else {
+          // 普通引擎：genmove
+          const movePromise = engine.genmove(g.state)
+          const timeoutPromise = new Promise<Move>((_, reject) =>
+            setTimeout(() => reject(new Error('引擎思考超时（30秒）')), 30000)
+          )
+          move = await Promise.race([movePromise, timeoutPromise])
         }
-
-        // 30s timeout protection
-        const movePromise = engine.genmove(g.state)
-        const timeoutPromise = new Promise<Move>((_, reject) =>
-          setTimeout(() => reject(new Error('引擎思考超时（30秒）')), 30000)
-        )
-
-        const move: Move = await Promise.race([movePromise, timeoutPromise])
 
         if (g.state.turn !== move.player) return
         g.playMove(move)
-        useAnalysisStore().clearCandidates()
+        analysisStore.clearCandidates()
         await tick(g)
       } catch (err) {
         engine.status = 'error'

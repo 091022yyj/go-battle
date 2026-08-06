@@ -3,6 +3,12 @@ import type { Analysis, CandidateMove, EngineAdapter, GameState, Move, Player } 
 // GTP 标准坐标：列字母跳过 'i'（a-h, j-t），行号为从底部数起的数字（1 = 最底行）
 const GTP_COLS = 'abcdefghjklmnopqrstuvwxyz'
 
+export type GoRules = 'chinese' | 'japanese' | 'ancient'
+export type GoStyle = 'balanced' | 'solid' | 'aggressive'
+
+// 棋力档位 → 每手思考秒数
+const LEVEL_SECONDS = [1, 2, 3, 5, 8]
+
 export interface GTPConfig {
   host: string
   port: number
@@ -35,18 +41,72 @@ export class GTPEngine implements EngineAdapter {
   #config: GTPConfig
   #ws: WebSocket | null = null
   #requestId = 0
-  #pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
+  #pending = new Map<
+    number,
+    {
+      resolve: (v: unknown) => void
+      reject: (e: Error) => void
+      onLine?: (line: string) => void
+    }
+  >()
   #connected = false
   #initialized = false
-  #komi = 3.75
+  #komi = 7.5
+  #rules: GoRules = 'chinese'
+  #style: GoStyle = 'balanced'
+  #level = 3
 
   constructor(_player: Player, config: GTPConfig) {
     this.#config = config
     this.name = config.engineName
   }
 
-  setLevel(_level: number): void {
-    // GTP engines don't have level setting in the same way
+  setLevel(level: number): void {
+    this.#level = Math.max(1, Math.min(5, level))
+  }
+
+  setRules(rules: GoRules, komi: number): void {
+    this.#rules = rules
+    this.#komi = komi
+    // 已连接则立即生效
+    if (this.#initialized) {
+      this.#applyRules().catch(() => {})
+    }
+  }
+
+  setStyle(style: GoStyle): void {
+    this.#style = style
+    if (this.#initialized) {
+      this.#applyStyle().catch(() => {})
+    }
+  }
+
+  async #applyRules(): Promise<void> {
+    const ruleName = this.#rules === 'japanese' ? 'japanese' : this.#rules === 'ancient' ? 'chinese' : 'chinese'
+    await this.#send('kata-set-rules', [ruleName])
+    await this.#send('komi', [String(this.#komi)])
+  }
+
+  async #applyStyle(): Promise<void> {
+    // 棋风通过搜索参数组合实现（KataGo kata-set-param 支持）
+    switch (this.#style) {
+      case 'solid':
+        // 稳健：保守的 FPU，低根噪声
+        await this.#send('kata-set-param', ['fpuReductionMax', '0.25'])
+        await this.#send('kata-set-param', ['wideRootNoise', '0.02'])
+        break
+      case 'aggressive':
+        // 激进：低 FPU（更敢下），高根噪声（变化多）
+        await this.#send('kata-set-param', ['fpuReductionMax', '0.0'])
+        await this.#send('kata-set-param', ['wideRootNoise', '0.06'])
+        break
+      case 'balanced':
+      default:
+        // 均衡
+        await this.#send('kata-set-param', ['fpuReductionMax', '0.15'])
+        await this.#send('kata-set-param', ['wideRootNoise', '0.03'])
+        break
+    }
   }
 
   async connect(): Promise<void> {
@@ -69,7 +129,6 @@ export class GTPEngine implements EngineAdapter {
         clearTimeout(timeout)
         this.#connected = true
         try {
-          // Verify engine responds
           const nameResp = await this.#send('name')
           console.log(`[GTP] Connected to ${nameResp.response}`)
           resolve()
@@ -94,6 +153,12 @@ export class GTPEngine implements EngineAdapter {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data)
+          // 流式行：转发给 onLine 回调
+          if (msg.streaming && msg.line !== undefined) {
+            const req = this.#pending.get(msg.id)
+            if (req?.onLine) req.onLine(msg.line)
+            return
+          }
           const req = this.#pending.get(msg.id)
           if (req) {
             this.#pending.delete(msg.id)
@@ -114,18 +179,24 @@ export class GTPEngine implements EngineAdapter {
     if (!this.#connected) await this.connect()
     await this.#send('boardsize', [String(size)])
     await this.#send('clear_board')
-    // GTP komi 必须是整数或半整数；中式数子 3.75 子 ≈ 7.5 目
+    // GTP komi 必须是整数或半整数
     const gtpKomi = komi === 3.75 ? 7.5 : Math.round(komi * 2) / 2
-    await this.#send('komi', [String(gtpKomi)])
     this.#komi = gtpKomi
+    await this.#applyRules()
+    await this.#applyStyle()
     this.#initialized = true
   }
 
-  async #send(cmd: string, args: string[] = [], streaming = false): Promise<{ ok: boolean; response?: string; error?: string }> {
+  async #send(
+    cmd: string,
+    args: string[] = [],
+    opts: { streaming?: boolean; onLine?: (line: string) => void } = {}
+  ): Promise<{ ok: boolean; response?: string; error?: string }> {
     if (!this.#ws || this.#ws.readyState !== WebSocket.OPEN) {
       throw new Error('Not connected')
     }
     const id = ++this.#requestId
+    const streaming = !!opts.streaming
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pending.delete(id)
@@ -142,6 +213,7 @@ export class GTPEngine implements EngineAdapter {
           clearTimeout(timer)
           reject(e)
         },
+        onLine: opts.onLine,
       })
 
       this.#ws!.send(JSON.stringify({ id, cmd, args, streaming }))
@@ -149,8 +221,6 @@ export class GTPEngine implements EngineAdapter {
   }
 
   async #replayHistory(state: GameState): Promise<void> {
-    // GTP engines maintain their own board state, so we replay all moves
-    // First reset
     await this.#send('boardsize', [String(state.size)])
     await this.#send('clear_board')
     await this.#send('komi', [String(this.#komi)])
@@ -172,7 +242,6 @@ export class GTPEngine implements EngineAdapter {
     this.status = 'thinking'
 
     try {
-      // Replay history to sync engine state
       await this.#replayHistory(state)
 
       const color = state.turn === 1 ? 'B' : 'W'
@@ -187,6 +256,57 @@ export class GTPEngine implements EngineAdapter {
     }
   }
 
+  /**
+   * 实时分析落子：发送 kata-analyze（持续输出 info 行），
+   * 通过 onUpdate 实时推送候选/胜率/目差，时间到停止并取最佳着法落子。
+   */
+  async genmoveLive(
+    state: GameState,
+    onUpdate?: (cands: CandidateMove[]) => void
+  ): Promise<Move> {
+    if (!this.#initialized) {
+      await this.initBoard(state.size, this.#komi)
+    }
+    await this.#replayHistory(state)
+
+    this.status = 'thinking'
+    const color = state.turn === 1 ? 'B' : 'W'
+    const analyzeCmd = this.#config.engineName === 'sayuri' ? 'analyze' : 'kata-analyze'
+    const seconds = LEVEL_SECONDS[this.#level - 1] || 3
+
+    try {
+      const resultPromise = this.#send(analyzeCmd, [color, String(seconds)], {
+        streaming: true,
+        onLine: (line) => {
+          if (line.startsWith('info')) {
+            try {
+              onUpdate?.(this.#parseInfoLines(line, state.size))
+            } catch {
+              // 解析失败忽略
+            }
+          }
+        },
+      })
+
+      // 分析时间到后停止
+      setTimeout(() => {
+        this.#send('kata-stop').catch(() => {})
+      }, seconds * 1000 + 300)
+
+      const result = await resultPromise
+      const cands = this.#parseInfoLines(result.response || '', state.size)
+      const best = cands[0]
+      this.status = 'idle'
+      return { player: state.turn, point: best ? best.point : null }
+    } catch (err) {
+      this.status = 'error'
+      throw err
+    }
+  }
+
+  /**
+   * 分析当前局面（供"最佳着法提示"按钮使用）
+   */
   async analyze(state: GameState): Promise<Analysis> {
     if (!this.#initialized) {
       await this.initBoard(state.size, this.#komi)
@@ -198,8 +318,6 @@ export class GTPEngine implements EngineAdapter {
       await this.#replayHistory(state)
 
       const color = state.turn === 1 ? 'B' : 'W'
-
-      // Use engine-specific analyze command
       const analyzeCmd = this.#config.engineName === 'sayuri' ? 'analyze' : 'kata-analyze'
       const result = await this.#analyzeWithStop(analyzeCmd, color, 2)
 
@@ -232,9 +350,9 @@ export class GTPEngine implements EngineAdapter {
   }
 
   /**
-   * 获取候选着法列表（用于棋盘上显示 AI 思考）。
+   * 获取候选着法列表（用于"最佳着法提示"）
    */
-  async getCandidates(state: GameState, seconds = 3, maxCandidates = 6): Promise<CandidateMove[]> {
+  async getCandidates(state: GameState, seconds = 2, maxCandidates = 6): Promise<CandidateMove[]> {
     if (!this.#initialized) {
       await this.initBoard(state.size, this.#komi)
     }
@@ -305,7 +423,6 @@ export class GTPEngine implements EngineAdapter {
     this.#connected = false
     this.#initialized = false
     this.status = 'idle'
-    // Reject pending requests
     for (const [, req] of this.#pending) {
       req.reject(new Error('Engine stopped'))
     }
