@@ -39,11 +39,12 @@ const PORT = parseInt(args.port, 10)
 const HOST = args.host
 
 // --- 调试日志（非刷屏：每命令一行，绝不打印 info 流式行） ---
-const DEBUG = process.env.GO_BATTLE_DEBUG === '1'
-function logCmd(cmd, argsList = [], streaming = false) {
-  if (!DEBUG && !['kata-analyze', 'analyze', 'genmove', 'play', 'boardsize'].includes(cmd)) return
+// 浏览器连接带连接 ID（conn-N），可区分多标签页/多次连接
+let connSeq = 0
+function logCmd(connId, cmd, argsList = [], streaming = false) {
+  const tag = connId ? `[conn-${connId}]` : '[warmup]'
   const s = argsList && argsList.length ? ' ' + argsList.join(' ') : ''
-  console.log(`[cmd] ← ${cmd}${s}${streaming ? ' (streaming)' : ''}`)
+  console.log(`${tag} ← ${cmd}${s}${streaming ? ' (streaming)' : ''}`)
 }
 // 单行摘要：从响应中提取第一个候选着法（点+visits+winrate）或响应开头
 function summarizeResponse(resp, maxLen = 90) {
@@ -80,7 +81,8 @@ function startEngine() {
         const req = pendingRequests.get(currentId)
         clearTimeout(req.timer)
         pendingRequests.delete(currentId)
-        console.log(`[cmd] → #${currentId} done (${summarizeResponse(responseBuffer)})`)
+        const connTag = req.connId ? `[conn-${req.connId}]` : '[warmup]'
+        console.log(`${connTag} → #${currentId} done (${summarizeResponse(responseBuffer)})`)
         req.resolve({ ok: true, response: responseBuffer })
         responseBuffer = ''
         currentId = null
@@ -107,7 +109,8 @@ function startEngine() {
               const r = pendingRequests.get(id)
               if (r) {
                 pendingRequests.delete(id)
-                console.log(`[cmd] → #${id} ok (${summarizeResponse(responseBuffer)})`)
+                const t = r.connId ? `[conn-${r.connId}]` : '[warmup]'
+                console.log(`${t} → #${id} ok (${summarizeResponse(responseBuffer)})`)
                 r.resolve({ ok: true, response: responseBuffer })
               }
               responseBuffer = ''
@@ -122,7 +125,8 @@ function startEngine() {
         if (req) {
           clearTimeout(req.timer)
           pendingRequests.delete(id)
-          console.log(`[cmd] → #${id} ERROR: ${(content || 'unknown error').slice(0, 120)}`)
+          const t = req.connId ? `[conn-${req.connId}]` : '[warmup]'
+          console.log(`${t} → #${id} ERROR: ${(content || 'unknown error').slice(0, 120)}`)
           req.resolve({ ok: false, error: content || 'unknown error' })
         }
         currentId = null
@@ -223,6 +227,9 @@ function stopEngine() {
 function sendCommand(cmd, argsList = [], opts = {}) {
   return new Promise((resolve, reject) => {
     if (!engineProc || (!engineReady && !opts.force)) {
+      const t = opts.connId ? `[conn-${opts.connId}]` : '[warmup]'
+      const s = argsList && argsList.length ? ' ' + argsList.join(' ') : ''
+      console.log(`${t} ← ${cmd}${s} (REJECTED: engine not ready)`)
       return reject(new Error('Engine not ready'))
     }
     const id = ++requestId
@@ -232,14 +239,15 @@ function sendCommand(cmd, argsList = [], opts = {}) {
     const timer = setTimeout(() => {
       if (pendingRequests.has(id)) {
         pendingRequests.delete(id)
-        console.log(`[cmd] → #${id} TIMEOUT after ${timeoutMs / 1000}s: ${cmd}`)
+        const t = opts.connId ? `[conn-${opts.connId}]` : '[warmup]'
+        console.log(`${t} → #${id} TIMEOUT after ${timeoutMs / 1000}s: ${cmd}`)
         reject(new Error(`GTP command timeout: ${cmd}`))
       }
     }, timeoutMs)
 
-    pendingRequests.set(id, { resolve, reject, timer, streaming: !!opts.streaming, onLine: opts.onLine })
+    pendingRequests.set(id, { resolve, reject, timer, streaming: !!opts.streaming, onLine: opts.onLine, connId: opts.connId })
 
-    logCmd(cmd, argsList, !!opts.streaming)
+    logCmd(opts.connId, cmd, argsList, !!opts.streaming)
     const gtpCmd = id + ' ' + cmd + (argsList.length ? ' ' + argsList.join(' ') : '')
     try {
       engineProc.stdin.write(gtpCmd + '\n')
@@ -260,7 +268,8 @@ wss.on('listening', () => {
 })
 
 wss.on('connection', (ws) => {
-  console.log('[bridge] Browser connected')
+  const connId = ++connSeq
+  console.log(`[bridge] Browser connected (conn-${connId})`)
 
   ws.on('message', async (data) => {
     let msg
@@ -281,7 +290,7 @@ wss.on('connection', (ws) => {
 
       if (cmd === 'kata-stop') {
         // 停止当前流式分析：向引擎发送空行（KataGo GTP 分析协议）
-        console.log('[cmd] ← kata-stop')
+        console.log(`[conn-${connId}] ← kata-stop`)
         if (engineProc) {
           engineProc.stdin.write('\n')
           ws.send(JSON.stringify({ id, ok: true, response: 'stopped' }))
@@ -294,6 +303,7 @@ wss.on('connection', (ws) => {
       // 流式命令：实时转发引擎输出的每一行
       const result = await sendCommand(cmd, cmdArgs || [], {
         streaming,
+        connId,
         onLine: streaming
           ? (line) => {
               ws.send(JSON.stringify({ id, ok: true, streaming: true, line }))
@@ -307,7 +317,7 @@ wss.on('connection', (ws) => {
   })
 
   ws.on('close', () => {
-    console.log('[bridge] Browser disconnected')
+    console.log(`[bridge] Browser disconnected (conn-${connId})`)
   })
 
   ws.on('error', (err) => {
