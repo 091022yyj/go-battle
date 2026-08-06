@@ -1,6 +1,7 @@
 import type { Analysis, EngineAdapter, GameState, Move, Player } from '../types'
 
-const COLS = 'abcdefghijklmnopqrstuvwxyz'
+// GTP 标准坐标：列字母跳过 'i'（a-h, j-t），行号为从底部数起的数字（1 = 最底行）
+const GTP_COLS = 'abcdefghjklmnopqrstuvwxyz'
 
 export interface GTPConfig {
   host: string
@@ -8,15 +9,22 @@ export interface GTPConfig {
   engineName: string // 'kata-go' | 'sayuri'
 }
 
-function pointToGTP(p: { x: number; y: number }): string {
-  return COLS[p.x] + COLS[p.y]
+function pointToGTP(p: { x: number; y: number }, size: number): string {
+  if (!p || p.x < 0 || p.y < 0 || p.x >= size || p.y >= size) return ''
+  return GTP_COLS[p.x] + String(size - p.y)
 }
 
-function gtpToPoint(s: string): { x: number; y: number } | null {
-  if (!s || s === 'pass' || s === 'PASS' || s === 'resign') return null
-  const x = COLS.indexOf(s[0]?.toLowerCase())
-  const y = COLS.indexOf(s[1]?.toLowerCase())
-  if (x < 0 || y < 0) return null
+function gtpToPoint(s: string, size: number): { x: number; y: number } | null {
+  const v = s.trim()
+  if (!v || v === 'pass' || v === 'PASS' || v === 'resign') return null
+  const col = v[0]?.toLowerCase()
+  const rowStr = v.slice(1)
+  if (!col || !rowStr) return null
+  const x = GTP_COLS.indexOf(col)
+  const row = parseInt(rowStr, 10)
+  if (x < 0 || isNaN(row)) return null
+  const y = size - row
+  if (x >= size || y < 0 || y >= size) return null
   return { x, y }
 }
 
@@ -106,8 +114,10 @@ export class GTPEngine implements EngineAdapter {
     if (!this.#connected) await this.connect()
     await this.#send('boardsize', [String(size)])
     await this.#send('clear_board')
-    await this.#send('komi', [String(komi)])
-    this.#komi = komi
+    // GTP komi 必须是整数或半整数；中式数子 3.75 子 ≈ 7.5 目
+    const gtpKomi = komi === 3.75 ? 7.5 : Math.round(komi * 2) / 2
+    await this.#send('komi', [String(gtpKomi)])
+    this.#komi = gtpKomi
     this.#initialized = true
   }
 
@@ -148,7 +158,7 @@ export class GTPEngine implements EngineAdapter {
     for (const m of state.history) {
       if (m.point) {
         const color = m.player === 1 ? 'B' : 'W'
-        const coord = pointToGTP(m.point)
+        const coord = pointToGTP(m.point, state.size)
         await this.#send('play', [color, coord])
       }
     }
@@ -169,7 +179,7 @@ export class GTPEngine implements EngineAdapter {
       const result = await this.#send('genmove', [color])
       this.status = 'idle'
 
-      const point = gtpToPoint(result.response || '')
+      const point = gtpToPoint(result.response || '', state.size)
       return { player: state.turn, point }
     } catch (err) {
       this.status = 'error'
@@ -204,7 +214,7 @@ export class GTPEngine implements EngineAdapter {
       // Parse KataGo format: info move D4 visits 12345 winrate 0.5234 scoreLead 1.5 ...
       const moveMatch = response.match(/move\s+(\w+)/i)
       if (moveMatch) {
-        bestPoint = gtpToPoint(moveMatch[1])
+        bestPoint = gtpToPoint(moveMatch[1], state.size)
       }
 
       const wrMatch = response.match(/winrate\s+([\d.]+)/i)

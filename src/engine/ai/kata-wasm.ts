@@ -25,17 +25,25 @@ interface WorkerResponse {
   error?: string
 }
 
-const COLS = 'abcdefghijklmnopqrstuvwxyz'
+// GTP 标准坐标：列字母跳过 'i'（a-h, j-t），行号为从底部数起的数字（1 = 最底行）
+const GTP_COLS = 'abcdefghjklmnopqrstuvwxyz'
 
-function pointToGTP(p: { x: number; y: number }): string {
-  return COLS[p.x] + COLS[p.y]
+function pointToGTP(p: { x: number; y: number }, size: number): string {
+  if (!p || p.x < 0 || p.y < 0 || p.x >= size || p.y >= size) return ''
+  return GTP_COLS[p.x] + String(size - p.y)
 }
 
-function gtpToPoint(s: string): { x: number; y: number } | null {
-  if (!s || s === 'pass' || s === 'PASS') return null
-  const x = COLS.indexOf(s[0]?.toLowerCase())
-  const y = COLS.indexOf(s[1]?.toLowerCase())
-  if (x < 0 || y < 0) return null
+function gtpToPoint(s: string, size: number): { x: number; y: number } | null {
+  const v = s.trim()
+  if (!v || v === 'pass' || v === 'PASS') return null
+  const col = v[0]?.toLowerCase()
+  const rowStr = v.slice(1)
+  if (!col || !rowStr) return null
+  const x = GTP_COLS.indexOf(col)
+  const row = parseInt(rowStr, 10)
+  if (x < 0 || isNaN(row)) return null
+  const y = size - row
+  if (x >= size || y < 0 || y >= size) return null
   return { x, y }
 }
 
@@ -153,7 +161,7 @@ export class KataWasmEngine implements EngineAdapter {
       for (const m of state.history) {
         if (m.point) {
           const color = m.player === 1 ? 'B' : 'W'
-          commands.push(`play ${color} ${pointToGTP(m.point)}`)
+          commands.push(`play ${color} ${pointToGTP(m.point, state.size)}`)
         }
       }
 
@@ -169,7 +177,7 @@ export class KataWasmEngine implements EngineAdapter {
 
       // Parse GTP response: = genmove_response
       const gtpResponse = lastLine.startsWith('=') ? lastLine.slice(1).trim() : lastLine.trim()
-      const point = gtpToPoint(gtpResponse)
+      const point = gtpToPoint(gtpResponse, state.size)
 
       return { player: state.turn, point }
     } catch (err) {
@@ -193,7 +201,7 @@ export class KataWasmEngine implements EngineAdapter {
       for (const m of state.history) {
         if (m.point) {
           const color = m.player === 1 ? 'B' : 'W'
-          commands.push(`play ${color} ${pointToGTP(m.point)}`)
+          commands.push(`play ${color} ${pointToGTP(m.point, state.size)}`)
         }
       }
 
@@ -209,7 +217,7 @@ export class KataWasmEngine implements EngineAdapter {
       let bestPoint: { x: number; y: number } | null = null
 
       const moveMatch = response.match(/move\s+(\w+)/i)
-      if (moveMatch) bestPoint = gtpToPoint(moveMatch[1])
+      if (moveMatch) bestPoint = gtpToPoint(moveMatch[1], state.size)
 
       const wrMatch = response.match(/winrate\s+([\d.]+)/i)
       if (wrMatch) winRate = parseFloat(wrMatch[1])

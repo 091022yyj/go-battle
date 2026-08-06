@@ -31,9 +31,10 @@ class MockWebSocket {
       if (msg.cmd === 'name') {
         response = JSON.stringify({ id: msg.id, ok: true, response: 'TestEngine' })
       } else if (msg.cmd === 'genmove') {
-        response = JSON.stringify({ id: msg.id, ok: true, response: 'dd' })
+        // 19 路棋盘，坐标 d16 → {x:3, y:3}（行号 16 = 从底部第 16 行）
+        response = JSON.stringify({ id: msg.id, ok: true, response: 'd16' })
       } else if (msg.cmd === 'kata-analyze') {
-        response = JSON.stringify({ id: msg.id, ok: true, response: 'info move ee winrate 0.6 scoreLead 2.5' })
+        response = JSON.stringify({ id: msg.id, ok: true, response: 'info move e16 winrate 0.6 scoreLead 2.5' })
       } else if (msg.cmd === 'boardsize' || msg.cmd === 'clear_board' || msg.cmd === 'komi' || msg.cmd === 'play') {
         response = JSON.stringify({ id: msg.id, ok: true, response: '' })
       } else {
