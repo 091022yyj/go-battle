@@ -303,7 +303,7 @@ export class GTPEngine implements EngineAdapter {
         onLine: (line) => {
           if (line.startsWith('info')) {
             try {
-              lastCands = this.#parseInfoLines(line, state.size)
+              lastCands = this.#parseInfoLines(line, state)
               onUpdate?.(lastCands)
             } catch {
               // 解析失败忽略
@@ -327,7 +327,7 @@ export class GTPEngine implements EngineAdapter {
         ),
       ])
 
-      const cands = this.#parseInfoLines(result.response || '', state.size)
+      const cands = this.#parseInfoLines(result.response || '', state)
       const merged = cands.length > 0 ? cands : lastCands
       const best = merged[0]
       this.status = 'idle'
