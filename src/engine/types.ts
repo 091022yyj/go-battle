@@ -36,3 +36,14 @@ export interface Analysis {
   bestMove: Move
   variations: Move[][]
 }
+
+export interface EngineAdapter {
+  name: string
+  engineType: 'simple' | 'kata-wasm' | 'kata-gtp'
+  status: 'idle' | 'thinking' | 'error'
+  setLevel(level: number): void
+  genmove(state: GameState): Promise<Move>
+  analyze(state: GameState): Promise<Analysis>
+  stop(): void
+  dispose(): void
+}
