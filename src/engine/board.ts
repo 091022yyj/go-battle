@@ -180,3 +180,20 @@ export function pass(state: GameState): GameState {
     inBounds: state.inBounds,
   }
 }
+
+export function undo(state: GameState): GameState {
+  if (state.history.length === 0) return state
+  const next = createBoard(state.size)
+  for (let k = 0; k < state.history.length - 1; k++) {
+    const m = state.history[k]
+    const s2 = m.point ? placeStone(next, m.point) : pass(next)
+    next.stones = s2.stones
+    next.turn = s2.turn
+    next.ko = s2.ko
+    next.captured = s2.captured
+    next.passCount = s2.passCount
+  }
+  next.history = state.history.slice(0, -1)
+  next.passCount = 0
+  return next
+}

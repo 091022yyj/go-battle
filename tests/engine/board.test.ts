@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createBoard, placeStone, pass } from '../../src/engine/board'
+import { createBoard, placeStone, pass, isLegalMove } from '../../src/engine/board'
 
 describe('board', () => {
   it('创建 9 路棋盘，全部为空，黑先', () => {
@@ -110,5 +110,62 @@ describe('placeStone & capture', () => {
     // 黑不能在 (4,4) 自杀——除非提子
     expect(s2.stones[9 * 4 + 4]).toBe(0)
     // 这个位置现在不能下（四面白且无气）
+  })
+})
+
+// Task 4 tests
+import { undo } from '../../src/engine/board'
+
+describe('pass & undo', () => {
+  it('pass 切换回合并记录', () => {
+    const b = createBoard(9)
+    const s = pass(b)
+    expect(s.turn).toBe(-1)
+    expect(s.history).toEqual([{ player: 1, point: null }])
+  })
+
+  it('连续两次 pass 终局', () => {
+    const b = createBoard(9)
+    const s1 = pass(b)
+    const s2 = pass(s1)
+    expect(s2.finished).toBe(true)
+  })
+
+  it('undo 撤销最后一步', () => {
+    const b = createBoard(9)
+    let s = placeStone(b, { x: 3, y: 3 })
+    s = placeStone(s, { x: 4, y: 4 })
+    const u = undo(s)
+    expect(u.history.length).toBe(1)
+    expect(u.stones[9 * 4 + 4]).toBe(0)
+    expect(u.turn).toBe(-1)
+  })
+})
+
+describe('ko', () => {
+  it('单子提子记录劫点，禁止立即回提', () => {
+    const b = createBoard(9)
+    // 构造劫局面
+    let s = playSequence(b, [
+      { player: 1, point: { x: 1, y: 0 } },   // 黑
+      { player: -1, point: { x: 0, y: 0 } },  // 白
+      { player: -1, point: { x: 2, y: 0 } },  // 白
+      { player: -1, point: { x: 0, y: 1 } },  // 白
+      { player: -1, point: { x: 1, y: 1 } },  // 白 → 提黑(1,0)，形成劫
+    ])
+    // 白在(1,1)提吃黑(1,0)，形成劫
+    expect(s.stones[9 * 0 + 1]).toBe(0) // (1,0) 被提
+    expect(s.captured.white).toBe(1)
+    // 劫点应为被提的黑子位置 (1,0)
+    expect(s.ko).toEqual({ x: 1, y: 0 })
+    // 黑不能立即回提
+    expect(isLegalMove(s, { x: 1, y: 0 })).toBe(false)
+    // 黑走别处 → 劫解除
+    const s2 = playSequence(s, [
+      { player: 1, point: { x: 8, y: 8 } },
+    ])
+    expect(s2.ko).toBeNull()
+    // 劫解除后白可以下(1,0)（正常落子，非提劫）
+    expect(isLegalMove(s2, { x: 1, y: 0 })).toBe(true)
   })
 })
