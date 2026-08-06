@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# KataGo WASM model files (user downloads separately)
+public/kata/

@@ -4,6 +4,7 @@ import GoBoard from './components/GoBoard.vue'
 import ControlBar from './components/ControlBar.vue'
 import AnalysisPanel from './components/AnalysisPanel.vue'
 import MoveList from './components/MoveList.vue'
+import StatusAlert from './components/StatusAlert.vue'
 import { useGameStore } from './stores/game'
 
 const g = useGameStore()
@@ -36,6 +37,7 @@ const resultLabel = computed(() => {
     </header>
 
     <ControlBar />
+    <StatusAlert />
 
     <div class="status-bar">
       <span class="turn" :class="{ finished: g.state.finished }">
