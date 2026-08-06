@@ -13,7 +13,7 @@ const e = useEngineStore()
 const a = useAnalysisStore()
 
 const size = ref(19)
-const mode = ref<'pvp' | 'pve' | 'evc'>('pvp')
+const mode = ref<'pve' | 'evc'>('pve')
 const humanColor = ref<1 | -1>(1)
 const level = ref(3)
 const engineType = ref<'simple' | 'kata-wasm' | 'kata-gtp'>('simple')
@@ -67,8 +67,6 @@ async function startGame() {
   a.reset()
   g.newGame(size.value, mode.value, 3.75)
 
-  if (mode.value === 'pvp') return
-
   try {
     if (mode.value === 'pve') {
       g.humanColor = humanColor.value
@@ -118,7 +116,6 @@ const engineStatusText = computed(() => {
       <label class="ctrl-label">
         <span class="label-text">模式</span>
         <select v-model="mode" @change="startGame">
-          <option value="pvp">👥 双人对弈</option>
           <option value="pve">🤖 人机对战</option>
           <option value="evc">⚔️ AI vs AI</option>
         </select>
@@ -132,27 +129,25 @@ const engineStatusText = computed(() => {
         </select>
       </label>
 
-      <template v-if="mode !== 'pvp'">
-        <label class="ctrl-label">
-          <span class="label-text">引擎</span>
-          <select v-model="engineType" @change="startGame">
-            <option value="simple">🧠 Simple AI</option>
-            <option value="kata-wasm">🌐 KataGo WASM</option>
-            <option value="kata-gtp">🔌 GTP 桥接</option>
-          </select>
-        </label>
+      <label class="ctrl-label">
+        <span class="label-text">引擎</span>
+        <select v-model="engineType" @change="startGame">
+          <option value="simple">🧠 Simple AI</option>
+          <option value="kata-wasm">🌐 KataGo WASM</option>
+          <option value="kata-gtp">🔌 GTP 桥接</option>
+        </select>
+      </label>
 
-        <label v-if="engineType === 'simple'" class="ctrl-label">
-          <span class="label-text">棋力</span>
-          <select v-model="level" @change="startGame">
-            <option v-for="l in 5" :key="l" :value="l">⭐ {{ l }}</option>
-          </select>
-        </label>
-      </template>
+      <label v-if="engineType === 'simple'" class="ctrl-label">
+        <span class="label-text">棋力</span>
+        <select v-model="level" @change="startGame">
+          <option v-for="l in 5" :key="l" :value="l">⭐ {{ l }}</option>
+        </select>
+      </label>
     </div>
 
     <!-- GTP Config Panel -->
-    <div v-if="engineType === 'kata-gtp' && mode !== 'pvp'" class="gtp-config">
+    <div v-if="engineType === 'kata-gtp'" class="gtp-config">
       <div class="config-row">
         <label class="mini-label">
           主机 <input v-model="gtpConfig.host" @change="saveGTPConfig()" placeholder="localhost" size="12" />

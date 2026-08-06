@@ -57,11 +57,17 @@ function startEngine() {
 
   rl.on('line', (line) => {
     line = line.trim()
-    if (!line) return
 
-    if (line === '= OK') {
-      // GTP multi-line response continues after = OK
-      responseBuffer = ''
+    // 空行 = GTP 响应结束（多行响应用空行分隔）
+    if (!line) {
+      if (currentId !== null && pendingRequests.has(currentId)) {
+        const req = pendingRequests.get(currentId)
+        clearTimeout(req.timer)
+        pendingRequests.delete(currentId)
+        req.resolve({ ok: true, response: responseBuffer })
+        responseBuffer = ''
+        currentId = null
+      }
       return
     }
 
@@ -72,24 +78,26 @@ function startEngine() {
       const id = idStr ? parseInt(idStr, 10) : currentId
 
       if (status === '=') {
+        // 响应正文（kata-analyze 的 "= OK" 也是响应起始）
+        currentId = id
         responseBuffer += (responseBuffer ? '\n' : '') + content
-        // GTP responses end with a blank line (which we handle above)
-        // For single-line responses or after collecting, we resolve
-        // We use a short timeout to detect end of multi-line response
-        if (pendingRequests.has(id)) {
-          clearTimeout(pendingRequests.get(id).timer)
-          const timer = setTimeout(() => {
-            const req = pendingRequests.get(id)
-            if (req) {
-              pendingRequests.delete(id)
-              req.resolve({ ok: true, response: responseBuffer })
-            }
-            responseBuffer = ''
-            currentId = null
-          }, 50)
-          if (pendingRequests.has(id)) {
-            pendingRequests.get(id).timer = timer
+        const req = pendingRequests.get(id)
+        if (req) {
+          if (!req.streaming) {
+            // 单行响应：若引擎不输出结尾空行，80ms 后强制结束
+            clearTimeout(req.timer)
+            const timer = setTimeout(() => {
+              const r = pendingRequests.get(id)
+              if (r) {
+                pendingRequests.delete(id)
+                r.resolve({ ok: true, response: responseBuffer })
+              }
+              responseBuffer = ''
+              currentId = null
+            }, 80)
+            req.timer = timer
           }
+          // streaming：保留 sendCommand 的长兜底 timer，等待空行结束
         }
       } else if (status === '?') {
         const req = pendingRequests.get(id)
@@ -99,6 +107,12 @@ function startEngine() {
           req.resolve({ ok: false, error: content || 'unknown error' })
         }
         currentId = null
+        responseBuffer = ''
+      }
+    } else {
+      // 非 =/? 行（kata-analyze 的 info 行等）→ 累积到响应正文
+      if (currentId !== null) {
+        responseBuffer += (responseBuffer ? '\n' : '') + line
       }
     }
   })
@@ -124,13 +138,23 @@ function startEngine() {
     pendingRequests.clear()
   })
 
-  // Send a simple command to verify engine is ready
-  setTimeout(() => {
-    if (engineProc) {
-      engineReady = true
-      console.log('[bridge] Engine ready')
+  // 等待引擎真正就绪：轮询 name 命令直到有响应
+  // （KataGo 首次启动需 10-30 秒初始化 GPU + 加载模型）
+  const checkReady = async () => {
+    if (!engineProc) return
+    try {
+      const resp = await sendCommand('name', [], { force: true })
+      if (resp.ok) {
+        engineReady = true
+        console.log('[bridge] Engine ready:', resp.response || '')
+        return
+      }
+      setTimeout(checkReady, 2000)
+    } catch {
+      setTimeout(checkReady, 2000)
     }
-  }, 500)
+  }
+  setTimeout(checkReady, 3000)
 }
 
 function stopEngine() {
@@ -148,21 +172,23 @@ function stopEngine() {
   engineReady = false
 }
 
-function sendCommand(cmd, argsList = []) {
+function sendCommand(cmd, argsList = [], opts = {}) {
   return new Promise((resolve, reject) => {
-    if (!engineProc || !engineReady) {
+    if (!engineProc || (!engineReady && !opts.force)) {
       return reject(new Error('Engine not ready'))
     }
     const id = ++requestId
     currentId = id
+    // 流式命令（kata-analyze 等）只在空行时结束；普通命令 30s 兜底
+    const timeoutMs = opts.streaming ? 60000 : 30000
     const timer = setTimeout(() => {
       if (pendingRequests.has(id)) {
         pendingRequests.delete(id)
         reject(new Error(`GTP command timeout: ${cmd}`))
       }
-    }, 30000)
+    }, timeoutMs)
 
-    pendingRequests.set(id, { resolve, reject, timer })
+    pendingRequests.set(id, { resolve, reject, timer, streaming: !!opts.streaming })
 
     const gtpCmd = id + ' ' + cmd + (argsList.length ? ' ' + argsList.join(' ') : '')
     try {
@@ -195,7 +221,7 @@ wss.on('connection', (ws) => {
       return
     }
 
-    const { id, cmd, args: cmdArgs } = msg
+    const { id, cmd, args: cmdArgs, streaming } = msg
 
     try {
       if (cmd === 'ping') {
@@ -203,7 +229,18 @@ wss.on('connection', (ws) => {
         return
       }
 
-      const result = await sendCommand(cmd, cmdArgs || [])
+      if (cmd === 'kata-stop') {
+        // 停止当前流式分析：向引擎发送空行（KataGo GTP 分析协议）
+        if (engineProc) {
+          engineProc.stdin.write('\n')
+          ws.send(JSON.stringify({ id, ok: true, response: 'stopped' }))
+        } else {
+          ws.send(JSON.stringify({ id, ok: false, error: 'Engine not ready' }))
+        }
+        return
+      }
+
+      const result = await sendCommand(cmd, cmdArgs || [], { streaming })
       ws.send(JSON.stringify({ id, ok: result.ok, response: result.response, error: result.error }))
     } catch (err) {
       ws.send(JSON.stringify({ id, ok: false, error: err.message }))

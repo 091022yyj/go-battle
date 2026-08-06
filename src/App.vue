@@ -14,7 +14,6 @@ const score = computed(() => g.score)
 const turnLabel = computed(() => {
   if (g.state.finished) return '对局结束'
   const color = g.state.turn === 1 ? '⚫ 黑方' : '⚪ 白方'
-  if (g.mode === 'pvp') return `${color}落子`
   if (g.mode === 'evc') return `${color} AI 计算中...`
   return g.state.turn === g.humanColor ? '🙋 请你落子' : '🤖 AI 思考中...'
 })

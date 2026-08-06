@@ -1,4 +1,4 @@
-import type { Analysis, EngineAdapter, GameState, Move, Player } from '../types'
+import type { Analysis, CandidateMove, EngineAdapter, GameState, Move, Player } from '../types'
 import { indexOf, isLegalMove, neighbors, opponent, pass, placeStone } from '../board'
 
 function legalMoves(state: GameState): { x: number; y: number }[] {
@@ -147,6 +147,22 @@ export class SimpleAI implements EngineAdapter {
     }
     this.status = 'idle'
     return { player: state.turn, point: best }
+  }
+
+  /**
+   * 候选着法列表：按启发式评分排序（简单 AI 无真实胜率，用评分归一化近似）
+   */
+  async getCandidates(state: GameState, _visits = 0, maxCandidates = 6): Promise<CandidateMove[]> {
+    const moves = legalMoves(state)
+    const scored = moves.map((p) => ({ point: p, score: this.#scoreMove(state, p) }))
+    scored.sort((a, b) => b.score - a.score)
+    const best = scored[0]?.score || 1
+    return scored.slice(0, maxCandidates).map((s) => ({
+      point: s.point,
+      winRate: Math.max(0.05, Math.min(0.95, 0.5 + s.score / Math.max(100, best))),
+      scoreLead: s.score,
+      visits: 0,
+    }))
   }
 
   async analyze(state: GameState): Promise<Analysis> {

@@ -1,4 +1,4 @@
-import type { Analysis, EngineAdapter, GameState, Move } from '../types'
+import type { Analysis, CandidateMove, EngineAdapter, GameState, Move } from '../types'
 
 /**
  * KataGo WASM Engine Adapter
@@ -211,30 +211,89 @@ export class KataWasmEngine implements EngineAdapter {
       const result = await this.#sendWorker('execute', [commands])
       this.status = 'idle'
 
-      const response = (result.result as string) || ''
-      let winRate = 0.5
-      let score = 0
-      let bestPoint: { x: number; y: number } | null = null
-
-      const moveMatch = response.match(/move\s+(\w+)/i)
-      if (moveMatch) bestPoint = gtpToPoint(moveMatch[1], state.size)
-
-      const wrMatch = response.match(/winrate\s+([\d.]+)/i)
-      if (wrMatch) winRate = parseFloat(wrMatch[1])
-
-      const scoreMatch = response.match(/scoreLead\s+([-\d.]+)/i)
-      if (scoreMatch) score = parseFloat(scoreMatch[1])
-
+      const analysis = this.#parseAnalysis((result.result as string) || '', state)
       return {
-        score,
-        winRate,
-        bestMove: { player: state.turn, point: bestPoint },
-        variations: bestPoint ? [[{ player: state.turn, point: bestPoint }]] : [],
+        score: analysis.score,
+        winRate: analysis.winRate,
+        bestMove: analysis.bestMove,
+        variations: analysis.bestMove.point ? [[analysis.bestMove]] : [],
+        candidates: analysis.candidates,
       }
     } catch (err) {
       this.status = 'error'
       throw err
     }
+  }
+
+  #parseAnalysis(response: string, state: GameState): {
+    score: number
+    winRate: number
+    bestMove: Move
+    candidates: CandidateMove[]
+  } {
+    // 每行可能包含多个候选段，按点去重取 visits 最大的快照
+    const seen = new Map<string, CandidateMove>()
+    const lines = response.split('\n').filter((l) => l.startsWith('info'))
+    for (const line of lines) {
+      const re = /move\s+(\w+)\s+.*?visits\s+(\d+)\s+.*?winrate\s+([\d.]+)\s+.*?scoreLead\s+([-\d.]+)/gi
+      let m: RegExpExecArray | null
+      while ((m = re.exec(line))) {
+        const point = gtpToPoint(m[1], state.size)
+        if (!point) continue
+        const cand: CandidateMove = {
+          point,
+          visits: parseInt(m[2], 10),
+          winRate: parseFloat(m[3]),
+          scoreLead: parseFloat(m[4]),
+        }
+        const key = `${point.x},${point.y}`
+        const prev = seen.get(key)
+        if (!prev || cand.visits >= prev.visits) seen.set(key, cand)
+      }
+    }
+    const candidates = [...seen.values()].sort((a, b) => b.winRate - a.winRate)
+
+    let winRate = 0.5
+    let score = 0
+    let bestPoint: { x: number; y: number } | null = null
+    if (candidates.length > 0) {
+      const best = candidates[0]
+      bestPoint = best.point
+      winRate = best.winRate
+      score = best.scoreLead
+    }
+
+    return {
+      score,
+      winRate,
+      bestMove: { player: state.turn, point: bestPoint },
+      candidates,
+    }
+  }
+
+  /**
+   * 候选着法列表（发送 kata-analyze 快速获取）
+   */
+  async getCandidates(state: GameState, visits = 150, maxCandidates = 6): Promise<CandidateMove[]> {
+    if (!this.#initialized) {
+      await this.initialize()
+    }
+
+    const commands: string[] = []
+    commands.push(`boardsize ${state.size}`)
+    commands.push('clear_board')
+    for (const m of state.history) {
+      if (m.point) {
+        const color = m.player === 1 ? 'B' : 'W'
+        commands.push(`play ${color} ${pointToGTP(m.point, state.size)}`)
+      }
+    }
+    const color = state.turn === 1 ? 'B' : 'W'
+    commands.push(`kata-analyze ${color} ${visits}`)
+
+    const result = await this.#sendWorker('execute', [commands])
+    const analysis = this.#parseAnalysis((result.result as string) || '', state)
+    return analysis.candidates.slice(0, maxCandidates)
   }
 
   stop(): void {

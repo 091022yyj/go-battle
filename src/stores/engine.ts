@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { shallowRef, ref } from 'vue'
 import type { EngineAdapter, Move } from '../engine/types'
 import type { useGameStore } from './game'
+import { useAnalysisStore } from './analysis'
 
 type GameStore = ReturnType<typeof useGameStore>
 
@@ -44,6 +45,36 @@ export const useEngineStore = defineStore('engine', () => {
     timer = setTimeout(async () => {
       if (g.state.finished) return
       try {
+        // 思考前先获取候选着法（棋盘候选点 + 分析面板同时更新，失败不阻断）
+        const candidatesEngine = engine as unknown as {
+          getCandidates?: (
+            s: GameStore['state'],
+            seconds?: number
+          ) => Promise<{ point: { x: number; y: number } | null; winRate: number; scoreLead: number }[]>
+        }
+        if (typeof candidatesEngine.getCandidates === 'function') {
+          try {
+            const analysisStore = useAnalysisStore()
+            const cands = await candidatesEngine.getCandidates(g.state, 2)
+            analysisStore.setCandidates(cands as never)
+            if (cands.length > 0) {
+              const best = cands[0]
+              analysisStore.setAnalysis(
+                {
+                  score: best.scoreLead,
+                  winRate: best.winRate,
+                  bestMove: { player: g.state.turn, point: best.point },
+                  variations: best.point ? [[{ player: g.state.turn, point: best.point }]] : [],
+                  candidates: cands as never,
+                },
+                g.state.history.length + 1
+              )
+            }
+          } catch {
+            // 候选获取失败不影响正式着法
+          }
+        }
+
         // 30s timeout protection
         const movePromise = engine.genmove(g.state)
         const timeoutPromise = new Promise<Move>((_, reject) =>
@@ -54,6 +85,7 @@ export const useEngineStore = defineStore('engine', () => {
 
         if (g.state.turn !== move.player) return
         g.playMove(move)
+        useAnalysisStore().clearCandidates()
         await tick(g)
       } catch (err) {
         engine.status = 'error'

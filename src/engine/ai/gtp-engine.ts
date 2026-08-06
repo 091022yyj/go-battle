@@ -1,4 +1,4 @@
-import type { Analysis, EngineAdapter, GameState, Move, Player } from '../types'
+import type { Analysis, CandidateMove, EngineAdapter, GameState, Move, Player } from '../types'
 
 // GTP 标准坐标：列字母跳过 'i'（a-h, j-t），行号为从底部数起的数字（1 = 最底行）
 const GTP_COLS = 'abcdefghjklmnopqrstuvwxyz'
@@ -121,7 +121,7 @@ export class GTPEngine implements EngineAdapter {
     this.#initialized = true
   }
 
-  async #send(cmd: string, args: string[] = []): Promise<{ ok: boolean; response?: string; error?: string }> {
+  async #send(cmd: string, args: string[] = [], streaming = false): Promise<{ ok: boolean; response?: string; error?: string }> {
     if (!this.#ws || this.#ws.readyState !== WebSocket.OPEN) {
       throw new Error('Not connected')
     }
@@ -131,7 +131,7 @@ export class GTPEngine implements EngineAdapter {
         this.#pending.delete(id)
         this.status = 'error'
         reject(new Error(`GTP command timeout: ${cmd}`))
-      }, 30000)
+      }, streaming ? 90000 : 30000)
 
       this.#pending.set(id, {
         resolve: (v: unknown) => {
@@ -144,7 +144,7 @@ export class GTPEngine implements EngineAdapter {
         },
       })
 
-      this.#ws!.send(JSON.stringify({ id, cmd, args }))
+      this.#ws!.send(JSON.stringify({ id, cmd, args, streaming }))
     })
   }
 
@@ -201,42 +201,99 @@ export class GTPEngine implements EngineAdapter {
 
       // Use engine-specific analyze command
       const analyzeCmd = this.#config.engineName === 'sayuri' ? 'analyze' : 'kata-analyze'
-      const result = await this.#send(analyzeCmd, [color, '50'])
+      const result = await this.#analyzeWithStop(analyzeCmd, color, 2)
 
       this.status = 'idle'
 
-      // Parse analysis output
-      const response = result.response || ''
-      let winRate = 0.5
-      let score = 0
-      let bestPoint: { x: number; y: number } | null = null
-
-      // Parse KataGo format: info move D4 visits 12345 winrate 0.5234 scoreLead 1.5 ...
-      const moveMatch = response.match(/move\s+(\w+)/i)
-      if (moveMatch) {
-        bestPoint = gtpToPoint(moveMatch[1], state.size)
-      }
-
-      const wrMatch = response.match(/winrate\s+([\d.]+)/i)
-      if (wrMatch) winRate = parseFloat(wrMatch[1])
-
-      const scoreMatch = response.match(/scoreLead\s+([-\d.]+)/i)
-      if (scoreMatch) score = parseFloat(scoreMatch[1])
-
-      const bestMove: Move = {
-        player: state.turn,
-        point: bestPoint,
-      }
-
-      return {
-        score,
-        winRate,
-        bestMove,
-        variations: bestPoint ? [[{ player: state.turn, point: bestPoint }]] : [],
-      }
+      return this.#parseAnalysis(result.response || '', state)
     } catch (err) {
       this.status = 'error'
       throw err
+    }
+  }
+
+  /**
+   * KataGo GTP 分析协议：kata-analyze 持续输出 info 行，
+   * 需发送空行（kata-stop）结束分析。
+   */
+  async #analyzeWithStop(
+    cmd: string,
+    color: string,
+    seconds: number
+  ): Promise<{ ok: boolean; response?: string; error?: string }> {
+    const resultPromise = this.#send(cmd, [color, String(seconds)], true)
+    await new Promise((r) => setTimeout(r, seconds * 1000 + 500))
+    try {
+      await this.#send('kata-stop')
+    } catch {
+      // 引擎可能已自行结束
+    }
+    return resultPromise
+  }
+
+  /**
+   * 获取候选着法列表（用于棋盘上显示 AI 思考）。
+   */
+  async getCandidates(state: GameState, seconds = 3, maxCandidates = 6): Promise<CandidateMove[]> {
+    if (!this.#initialized) {
+      await this.initBoard(state.size, this.#komi)
+    }
+    await this.#replayHistory(state)
+
+    const color = state.turn === 1 ? 'B' : 'W'
+    const analyzeCmd = this.#config.engineName === 'sayuri' ? 'analyze' : 'kata-analyze'
+    const result = await this.#analyzeWithStop(analyzeCmd, color, seconds)
+
+    return this.#parseInfoLines(result.response || '', state).slice(0, maxCandidates)
+  }
+
+  /**
+   * 解析 KataGo 分析输出：每行可能包含多个候选段
+   * （info move E5 visits N ... info move F5 visits N ...），
+   * 按点去重取 visits 最大的快照。
+   */
+  #parseInfoLines(response: string, state: GameState): CandidateMove[] {
+    const seen = new Map<string, CandidateMove>()
+    const lines = response.split('\n').filter((l) => l.startsWith('info'))
+    for (const line of lines) {
+      const re = /move\s+(\w+)\s+.*?visits\s+(\d+)\s+.*?winrate\s+([\d.]+)\s+.*?scoreLead\s+([-\d.]+)/gi
+      let m: RegExpExecArray | null
+      while ((m = re.exec(line))) {
+        const point = gtpToPoint(m[1], state.size)
+        if (!point) continue
+        const cand: CandidateMove = {
+          point,
+          visits: parseInt(m[2], 10),
+          winRate: parseFloat(m[3]),
+          scoreLead: parseFloat(m[4]),
+        }
+        const key = `${point.x},${point.y}`
+        const prev = seen.get(key)
+        if (!prev || cand.visits >= prev.visits) seen.set(key, cand)
+      }
+    }
+    return [...seen.values()].sort((a, b) => b.winRate - a.winRate)
+  }
+
+  #parseAnalysis(response: string, state: GameState): Analysis {
+    const candidates = this.#parseInfoLines(response, state)
+    let winRate = 0.5
+    let score = 0
+    let bestPoint: { x: number; y: number } | null = null
+
+    if (candidates.length > 0) {
+      const best = candidates[0]
+      bestPoint = best.point
+      winRate = best.winRate
+      score = best.scoreLead
+    }
+
+    return {
+      score,
+      winRate,
+      bestMove: { player: state.turn, point: bestPoint },
+      variations: bestPoint ? [[{ player: state.turn, point: bestPoint }]] : [],
+      candidates,
     }
   }
 

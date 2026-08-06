@@ -30,11 +30,19 @@ export interface GameState {
   inBounds(p: Point): boolean
 }
 
+export interface CandidateMove {
+  point: Point
+  winRate: number
+  scoreLead: number
+  visits: number
+}
+
 export interface Analysis {
   score: number
   winRate: number
   bestMove: Move
   variations: Move[][]
+  candidates?: CandidateMove[]
 }
 
 export interface EngineAdapter {

@@ -5,12 +5,12 @@ import { stateToSGF, sgfToState } from '../engine/sgf'
 import type { GameState, Point } from '../engine/types'
 import { useEngineStore } from './engine'
 
-export type GameMode = 'pvp' | 'pve' | 'evc'
+export type GameMode = 'pve' | 'evc'
 
 export const useGameStore = defineStore('game', {
   state: () => ({
     size: 19 as number,
-    mode: 'pvp' as GameMode,
+    mode: 'pve' as GameMode,
     komi: 3.75,
     state: createBoard(19) as GameState,
     humanColor: 1 as 1 | -1,
@@ -22,7 +22,6 @@ export const useGameStore = defineStore('game', {
       return this.state.turn
     },
     isHumanTurn(): boolean {
-      if (this.mode === 'pvp') return true
       if (this.mode === 'evc') return false
       return this.state.turn === this.humanColor
     },
@@ -113,7 +112,8 @@ export const useGameStore = defineStore('game', {
     importSGF(sgf: string) {
       const s = sgfToState(sgf)
       this.size = s.size
-      this.mode = 'pvp'
+      this.mode = 'pve'
+      this.humanColor = 1
       this.state = s
       this.cursor = s.history.length
     },

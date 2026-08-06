@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import type { Analysis } from '../engine/types'
+import type { Analysis, CandidateMove } from '../engine/types'
 
 export interface CurvePoint {
   moveNumber: number
@@ -11,12 +11,19 @@ export const useAnalysisStore = defineStore('analysis', {
     latest: null as Analysis | null,
     curve: [] as CurvePoint[],
     running: false,
+    candidates: [] as CandidateMove[],
   }),
   actions: {
     setAnalysis(a: Analysis, moveNumber: number) {
       this.latest = a
       this.running = false
       this.push({ moveNumber, winRate: a.winRate })
+    },
+    setCandidates(c: CandidateMove[]) {
+      this.candidates = c
+    },
+    clearCandidates() {
+      this.candidates = []
     },
     push(p: CurvePoint) {
       this.curve = [...this.curve, p]
@@ -28,6 +35,7 @@ export const useAnalysisStore = defineStore('analysis', {
       this.latest = null
       this.curve = []
       this.running = false
+      this.candidates = []
     },
   },
 })

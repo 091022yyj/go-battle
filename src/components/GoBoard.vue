@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useGameStore } from '../stores/game'
+import { useAnalysisStore } from '../stores/analysis'
 import type { Point } from '../engine/types'
 
 const props = defineProps<{ showCoordinates?: boolean }>()
 const canvas = ref<HTMLCanvasElement | null>(null)
 const g = useGameStore()
+const analysis = useAnalysisStore()
 let ctx: CanvasRenderingContext2D | null = null
 let raf = 0
 
@@ -180,6 +182,39 @@ function draw() {
     }
   } else if (animatingStone.value) {
     animatingStone.value = null
+  }
+
+  // AI 思考候选点（实心圆点 + 胜率百分比）
+  if (analysis.candidates.length > 0 && !g.state.finished) {
+    for (const c of analysis.candidates) {
+      if (!c.point || c.point.x >= n || c.point.y >= n) continue
+      const p = toCanvasPoint(c.point)
+      const isOccupied = g.state.stones[c.point.y * n + c.point.x] !== 0
+      if (isOccupied) continue
+
+      // 圆点：胜率越高越大越红
+      const wr = Math.max(0, Math.min(1, c.winRate))
+      const r = 3 + wr * 6
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+      ctx.fillStyle = `rgba(255, 60, 60, ${0.25 + wr * 0.4})`
+      ctx.fill()
+      ctx.lineWidth = 1
+      ctx.strokeStyle = `rgba(255, 60, 60, ${0.3 + wr * 0.5})`
+      ctx.stroke()
+
+      // 胜率数字（带背景描边保证可读）
+      const label = `${Math.round(wr * 100)}%`
+      ctx.font = 'bold 10px sans-serif'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      const ly = p.y - r - 5
+      ctx.lineWidth = 3
+      ctx.strokeStyle = 'rgba(232,193,112,0.9)'
+      ctx.strokeText(label, p.x, ly)
+      ctx.fillStyle = wr > 0.6 ? '#c41e1e' : '#7a4a12'
+      ctx.fillText(label, p.x, ly)
+    }
   }
 
   // Last move marker (pulse)
