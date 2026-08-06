@@ -7,7 +7,7 @@ export type GoRules = 'chinese' | 'japanese' | 'ancient'
 export type GoStyle = 'balanced' | 'solid' | 'aggressive'
 
 // 棋力档位 → 每手思考秒数
-const LEVEL_SECONDS = [1, 2, 3, 5, 8]
+const LEVEL_SECONDS = [1, 2, 3, 4, 5]
 
 export interface GTPConfig {
   host: string

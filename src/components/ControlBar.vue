@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useGameStore } from '../stores/game'
 import { useEngineStore } from '../stores/engine'
 import { useAnalysisStore } from '../stores/analysis'
@@ -49,6 +49,9 @@ function saveGTPConfig() {
 const gtpStatus = ref<'disconnected' | 'connecting' | 'connected'>('disconnected')
 const hintLoading = ref(false)
 
+// 配置持久化 key：自动恢复上次设置并直接开始对局
+const CONFIG_KEY = 'go-battle-config'
+
 // 键盘快捷键
 function onKeydown(e: KeyboardEvent) {
   if (e.ctrlKey && e.key.toLowerCase() === 'z') {
@@ -66,6 +69,39 @@ function onNewGameEvent() {
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
   window.addEventListener('go-battle:new-game', onNewGameEvent)
+  // 恢复上次配置并自动开始对局（打开即玩，无需手动点「新局」）
+  try {
+    const saved = localStorage.getItem(CONFIG_KEY)
+    if (saved) {
+      const c = JSON.parse(saved)
+      if (typeof c.size === 'number') size.value = c.size
+      if (c.mode === 'pve' || c.mode === 'evc') mode.value = c.mode
+      if (c.humanColor === 1 || c.humanColor === -1) humanColor.value = c.humanColor
+      if (typeof c.level === 'number') level.value = c.level
+      if (c.engineType === 'simple' || c.engineType === 'kata-wasm' || c.engineType === 'kata-gtp') engineType.value = c.engineType
+      if (c.rules === 'chinese' || c.rules === 'japanese' || c.rules === 'ancient') rules.value = c.rules
+      if (c.style === 'balanced' || c.style === 'solid' || c.style === 'aggressive') style.value = c.style
+    }
+  } catch {
+    // 配置损坏时忽略，使用默认值
+  }
+  startGame()
+})
+
+// 持久化设置：用户修改任何配置时自动保存，下次打开/刷新自动恢复
+watch([size, mode, humanColor, level, engineType, rules, style], () => {
+  localStorage.setItem(
+    CONFIG_KEY,
+    JSON.stringify({
+      size: size.value,
+      mode: mode.value,
+      humanColor: humanColor.value,
+      level: level.value,
+      engineType: engineType.value,
+      rules: rules.value,
+      style: style.value,
+    })
+  )
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
