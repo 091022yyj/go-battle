@@ -127,6 +127,7 @@ cleanup() {
   info "正在关闭服务..."
   [ -n "$VITE_PID" ] && kill $VITE_PID 2>/dev/null
   [ -n "$BRIDGE_PID" ] && kill $BRIDGE_PID 2>/dev/null
+  [ -n "$TAIL_PID" ] && kill $TAIL_PID 2>/dev/null
   ok "已全部关闭。再见！"
   exit 0
 }
