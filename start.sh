@@ -112,6 +112,7 @@ ok "  围棋对战平台已就绪:  $URL"
 ok "  模式: 人机对战 / AI vs AI"
 ok "  引擎: GTP 桥接 (KataGo 智子 b40c768)"
 ok "  操作: Ctrl+C 关闭全部服务"
+warn "  若页面异常（AI 不落子/白屏），请强制刷新: Ctrl+Shift+R"
 ok "=========================================="
 
 if command -v xdg-open >/dev/null 2>&1; then

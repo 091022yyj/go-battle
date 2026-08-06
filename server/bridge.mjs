@@ -38,6 +38,22 @@ const ENGINE_ARGS = args.args ? args.args.split(/\s+/) : []
 const PORT = parseInt(args.port, 10)
 const HOST = args.host
 
+// --- 调试日志（非刷屏：每命令一行，绝不打印 info 流式行） ---
+const DEBUG = process.env.GO_BATTLE_DEBUG === '1'
+function logCmd(cmd, argsList = [], streaming = false) {
+  if (!DEBUG && !['kata-analyze', 'analyze', 'genmove', 'play', 'boardsize'].includes(cmd)) return
+  const s = argsList && argsList.length ? ' ' + argsList.join(' ') : ''
+  console.log(`[cmd] ← ${cmd}${s}${streaming ? ' (streaming)' : ''}`)
+}
+// 单行摘要：从响应中提取第一个候选着法（点+visits+winrate）或响应开头
+function summarizeResponse(resp, maxLen = 90) {
+  if (!resp) return '∅'
+  const m = resp.match(/info move (\w+) visits (\d+).*?winrate ([\d.]+)/)
+  if (m) return `best=${m[1]} visits=${m[2]} winrate=${(+m[3]).toFixed(2)}`
+  const one = resp.split('\n')[0]
+  return one.length > maxLen ? one.slice(0, maxLen) + '…' : one
+}
+
 // --- Engine process management ---
 let engineProc = null
 let engineReady = false
@@ -64,6 +80,7 @@ function startEngine() {
         const req = pendingRequests.get(currentId)
         clearTimeout(req.timer)
         pendingRequests.delete(currentId)
+        console.log(`[cmd] → #${currentId} done (${summarizeResponse(responseBuffer)})`)
         req.resolve({ ok: true, response: responseBuffer })
         responseBuffer = ''
         currentId = null
@@ -90,6 +107,7 @@ function startEngine() {
               const r = pendingRequests.get(id)
               if (r) {
                 pendingRequests.delete(id)
+                console.log(`[cmd] → #${id} ok (${summarizeResponse(responseBuffer)})`)
                 r.resolve({ ok: true, response: responseBuffer })
               }
               responseBuffer = ''
@@ -104,6 +122,7 @@ function startEngine() {
         if (req) {
           clearTimeout(req.timer)
           pendingRequests.delete(id)
+          console.log(`[cmd] → #${id} ERROR: ${(content || 'unknown error').slice(0, 120)}`)
           req.resolve({ ok: false, error: content || 'unknown error' })
         }
         currentId = null
@@ -163,11 +182,13 @@ function startEngine() {
 
   // 预热：OpenCL 后端首次搜索需编译 kernel（可能 30-60 秒），
   // 启动后先跑一次较长分析让 kernel 完全编译，避免首局极慢。
-  // 预热完成后才标记引擎就绪。
+  // 注意：预热必须用真实对局尺寸（19 路）——KataGo 对每个
+  // boardsize 单独编译 NN kernel，若用 9 路预热，首局 19 路
+  // 仍需现场编译，表现为"AI 一直思考不下"。
   const warmupEngine = async () => {
     try {
-      console.log('[bridge] Warming up engine (kernel compile)...')
-      await sendCommand('boardsize', ['9'], { force: true })
+      console.log('[bridge] Warming up engine (kernel compile, 19x19)...')
+      await sendCommand('boardsize', ['19'], { force: true })
       await sendCommand('clear_board', [], { force: true })
       const p = sendCommand('kata-analyze', ['B', '8'], { force: true, streaming: true })
       await new Promise((r) => setTimeout(r, 8500))
@@ -211,12 +232,14 @@ function sendCommand(cmd, argsList = [], opts = {}) {
     const timer = setTimeout(() => {
       if (pendingRequests.has(id)) {
         pendingRequests.delete(id)
+        console.log(`[cmd] → #${id} TIMEOUT after ${timeoutMs / 1000}s: ${cmd}`)
         reject(new Error(`GTP command timeout: ${cmd}`))
       }
     }, timeoutMs)
 
     pendingRequests.set(id, { resolve, reject, timer, streaming: !!opts.streaming, onLine: opts.onLine })
 
+    logCmd(cmd, argsList, !!opts.streaming)
     const gtpCmd = id + ' ' + cmd + (argsList.length ? ' ' + argsList.join(' ') : '')
     try {
       engineProc.stdin.write(gtpCmd + '\n')
@@ -258,6 +281,7 @@ wss.on('connection', (ws) => {
 
       if (cmd === 'kata-stop') {
         // 停止当前流式分析：向引擎发送空行（KataGo GTP 分析协议）
+        console.log('[cmd] ← kata-stop')
         if (engineProc) {
           engineProc.stdin.write('\n')
           ws.send(JSON.stringify({ id, ok: true, response: 'stopped' }))
