@@ -12,6 +12,7 @@ const g = useGameStore()
 const score = computed(() => g.score)
 
 const turnLabel = computed(() => {
+  if (g.editing) return '✏️ 摆子模式（点击棋盘放置/移除棋子）'
   if (g.state.finished) return '对局结束'
   const color = g.state.turn === 1 ? '⚫ 黑方' : '⚪ 白方'
   if (g.mode === 'evc') return `${color} AI 计算中...`

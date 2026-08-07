@@ -109,6 +109,10 @@ export const useGameStore = defineStore('game', {
       this.generation++
       this.editBaseLen = 0
       this.editNextColor = 1
+      // 新局时退出摆子编辑（编辑中切换规则/尺寸等会触发 newGame）
+      this.editing = false
+      this.editHistory = []
+      this.editColor = 1
     },
     playHuman(point: Point) {
       if (this.state.finished) return

@@ -84,6 +84,7 @@ export const useEngineStore = defineStore('engine', () => {
           let lastMoveNum = -1
           analysisStore.setRunning(true)
           move = await liveEngine.genmoveLive(g.state, (cands) => {
+            if (paused.value) return // 暂停中不刷新候选/分析（在途分析的结果被丢弃）
             // 候选点实时刷新（每行 info 都更新，保持棋盘动态）
             analysisStore.setCandidates(cands as never)
             // 胜率/目差/曲线按"手数"去重——同一手只取最优快照，

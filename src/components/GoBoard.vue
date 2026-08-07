@@ -318,7 +318,7 @@ onBeforeUnmount(() => cancelAnimationFrame(raf))
       ref="canvas"
       @click="handleClick"
       class="go-board"
-      :class="{ clickable: g.isHumanTurn && !g.state.finished }"
+      :class="{ clickable: (g.isHumanTurn || g.editing) && !g.state.finished }"
     ></canvas>
   </div>
 </template>
