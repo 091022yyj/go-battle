@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { createBoard, isLegalMove, pass, placeStone, stateFromHistory, undo } from '../engine/board'
+import { createBoard, isLegalMove, pass, placeStone } from '../engine/board'
 import { countScore } from '../engine/rules'
 import { stateToSGF, sgfToState } from '../engine/sgf'
 import type { GameState, Point } from '../engine/types'
@@ -7,6 +7,39 @@ import { useEngineStore } from './engine'
 import { useAnalysisStore } from './analysis'
 
 export type GameMode = 'pve' | 'evc'
+
+/**
+ * 从历史重建局面：
+ * - 摆子段（0..editBaseLen）：按记录颜色显式放置（快照还原，不轮转不提子）
+ * - 后续段（editBaseLen..）：正常轮转落子（placeStone，含提子/劫）
+ * 解决"摆子历史非轮转、轮转重放导致棋子颜色错乱"的问题。
+ */
+function rebuildState(
+  size: number,
+  hist: GameState['history'],
+  editBaseLen: number,
+  editNextColor: 1 | -1
+): GameState {
+  const s = createBoard(size)
+  for (let k = 0; k < Math.min(editBaseLen, hist.length); k++) {
+    const m = hist[k]
+    if (!m.point) continue
+    const i = m.point.y * s.size + m.point.x
+    if (i >= 0 && i < s.stones.length && s.stones[i] === 0) s.stones[i] = m.player
+  }
+  s.turn = editNextColor
+  for (let k = editBaseLen; k < hist.length; k++) {
+    const m = hist[k]
+    const s2 = m.point ? placeStone(s, m.point) : pass(s)
+    s.stones = s2.stones
+    s.turn = s2.turn
+    s.ko = s2.ko
+    s.captured = s2.captured
+    s.passCount = s2.passCount
+  }
+  s.history = hist
+  return s
+}
 
 export const useGameStore = defineStore('game', {
   state: () => ({
@@ -23,6 +56,10 @@ export const useGameStore = defineStore('game', {
     editing: false,
     editColor: 1 as 1 | -1,
     editHistory: [] as { player: 1 | -1; point: Point }[],
+    // 摆子段手数：历史前段（0..editBaseLen）是摆子序列（非轮转，须显式放置还原），
+    // 后续着法为正常轮转对局（placeStone 重放）
+    editBaseLen: 0,
+    editNextColor: 1 as 1 | -1,
   }),
   getters: {
     currentPlayer(): 1 | -1 {
@@ -37,7 +74,7 @@ export const useGameStore = defineStore('game', {
     },
     // 回放视图：按 cursor 重建局面（悔棋/跳转后棋盘只显示到游标位置）
     displayState(): GameState {
-      const s = stateFromHistory(this.state, this.state.history.slice(0, this.cursor))
+      const s = rebuildState(this.size, this.state.history.slice(0, this.cursor), this.editBaseLen, this.editNextColor)
       s.finished = this.state.finished
       return s
     },
@@ -56,6 +93,12 @@ export const useGameStore = defineStore('game', {
     },
   },
   actions: {
+    /**
+     * 从历史重建局面（供 actions 内部使用，与 displayState 同一逻辑）。
+     */
+    rebuild(hist: GameState['history']): GameState {
+      return rebuildState(this.size, hist, this.editBaseLen, this.editNextColor)
+    },
     newGame(size: number, mode: GameMode, komi: number) {
       this.size = size
       this.mode = mode
@@ -64,6 +107,8 @@ export const useGameStore = defineStore('game', {
       this.resigner = null
       this.cursor = 0
       this.generation++
+      this.editBaseLen = 0
+      this.editNextColor = 1
     },
     playHuman(point: Point) {
       if (this.state.finished) return
@@ -72,7 +117,7 @@ export const useGameStore = defineStore('game', {
       // 否则棋盘状态停留在完整局，落子会与未来手冲突/颜色错误
       if (this.cursor < this.state.history.length) {
         this.generation++
-        this.state = stateFromHistory(this.state, this.state.history.slice(0, this.cursor))
+        this.state = this.rebuild(this.state.history.slice(0, this.cursor))
       }
       if (!this.isHumanTurn) return
       if (!isLegalMove(this.state, point)) return
@@ -96,7 +141,11 @@ export const useGameStore = defineStore('game', {
       if (this.state.history.length === 0) return
       if (this.mode === 'evc') return
       this.generation++
-      this.state = undo(this.state)
+      // 用重建逻辑（摆子段显式放置 + 后续轮转）而非 placeStone 全量轮转重放，
+      // 否则悔掉摆子后的着法时棋子颜色会错乱
+      const rebuilt = this.rebuild(this.state.history.slice(0, -1))
+      rebuilt.finished = false
+      this.state = rebuilt
       this.cursor = this.state.history.length
       // 悔棋后让引擎按当前轮次重新思考（pve 悔掉 AI 手后 AI 需再下）
       const engine = useEngineStore()
@@ -133,6 +182,8 @@ export const useGameStore = defineStore('game', {
       this.state = s
       this.cursor = s.history.length
       this.generation++
+      this.editBaseLen = 0
+      this.editNextColor = 1
       // 停止旧引擎的在途思考，清空上一局的分析残留
       useEngineStore().stop()
       useAnalysisStore().reset()
@@ -191,6 +242,9 @@ export const useGameStore = defineStore('game', {
       s.passCount = 0
       s.ko = null
       s.captured = { black: 0, white: 0 }
+      // 记录摆子段信息：历史前段为非轮转摆子序列，须显式放置还原
+      this.editBaseLen = this.editHistory.length
+      this.editNextColor = nextColor
       this.state = s
       this.cursor = s.history.length
       this.editing = false
