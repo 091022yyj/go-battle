@@ -60,6 +60,8 @@ export const useGameStore = defineStore('game', {
     // 后续着法为正常轮转对局（placeStone 重放）
     editBaseLen: 0,
     editNextColor: 1 as 1 | -1,
+    // 当前对局 id（自动保存用，新局时重新生成）
+    gameId: 0 as number,
   }),
   getters: {
     currentPlayer(): 1 | -1 {
@@ -113,6 +115,7 @@ export const useGameStore = defineStore('game', {
       this.editing = false
       this.editHistory = []
       this.editColor = 1
+      this.gameId = Date.now()
     },
     playHuman(point: Point) {
       if (this.state.finished) return
@@ -257,5 +260,110 @@ export const useGameStore = defineStore('game', {
       // 强制引擎全量重放（摆子后的棋盘与引擎不同步），restartEngine 内部解除暂停并启动思考
       useEngineStore().restartEngine(this as unknown as ReturnType<typeof useGameStore>, nextColor, true)
     },
+    /**
+     * 让子棋：自动摆好 N 个黑子（标准星位），白先下。
+     * 让子序列作为摆子段历史（显式放置还原），引擎全量重放同步。
+     */
+    handicapGame(n: number) {
+      if (n < 2 || n > 9 || this.state.finished) return
+      const st = this.size === 9 ? [2, 4, 6] : this.size === 13 ? [3, 6, 9] : [3, 9, 15]
+      const corners = [
+        { x: st[0], y: st[0] }, // 左上
+        { x: st[2], y: st[0] }, // 右上
+        { x: st[0], y: st[2] }, // 左下
+        { x: st[2], y: st[2] }, // 右下
+      ]
+      const edges = [
+        { x: st[1], y: st[0] }, // 上边
+        { x: st[1], y: st[2] }, // 下边
+        { x: st[0], y: st[1] }, // 左边
+        { x: st[2], y: st[1] }, // 右边
+      ]
+      const tengen = { x: st[1], y: st[1] }
+      let pts: Point[]
+      if (n === 2) pts = [corners[1], corners[2]]
+      else if (n === 3) pts = [corners[1], corners[2], tengen]
+      else if (n === 4) pts = corners
+      else if (n === 5) pts = [...corners, tengen]
+      else if (n === 6) pts = [...corners, edges[0], edges[1]]
+      else if (n === 7) pts = [...corners, edges[0], edges[1], tengen]
+      else if (n === 8) pts = [...corners, ...edges]
+      else pts = [...corners, ...edges, tengen]
+      // 摆黑子序列（摆子段），白先下
+      this.generation++
+      useEngineStore().pause()
+      useAnalysisStore().reset()
+      const s = createBoard(this.size)
+      for (const p of pts) s.stones[p.y * s.size + p.x] = 1
+      s.history = pts.map((p) => ({ player: 1 as const, point: p }))
+      s.turn = -1
+      this.state = s
+      this.cursor = s.history.length
+      this.editBaseLen = pts.length
+      this.editNextColor = -1
+      this.editing = false
+      this.editHistory = []
+      // AI（白）立即思考
+      useEngineStore().restartEngine(this as unknown as ReturnType<typeof useGameStore>, -1, true)
+    },
+    // ===== 对局自动保存（localStorage） =====
+    saveToHistory() {
+      try {
+        const games = JSON.parse(localStorage.getItem(GAMES_KEY) || '[]') as GameHistoryEntry[]
+        const entry: GameHistoryEntry = {
+          id: this.gameId,
+          ts: Date.now(),
+          size: this.size,
+          mode: this.mode,
+          komi: this.komi,
+          humanColor: this.humanColor,
+          sgf: this.toSGF(),
+          finished: this.state.finished,
+          turns: this.state.history.length,
+        }
+        const idx = games.findIndex((g) => g.id === this.gameId)
+        if (idx >= 0) games[idx] = entry
+        else games.unshift(entry)
+        // 上限 30 局，超出丢弃最旧
+        if (games.length > 30) games.length = 30
+        localStorage.setItem(GAMES_KEY, JSON.stringify(games))
+      } catch {
+        // localStorage 不可用/满时静默忽略
+      }
+    },
+    /** 历史对局列表（新的在前）；用方法而非 getter，避免 Pinia 缓存不随 localStorage 更新 */
+    historyGames(): GameHistoryEntry[] {
+      try {
+        return (JSON.parse(localStorage.getItem(GAMES_KEY) || '[]') as GameHistoryEntry[]).slice(0, 30)
+      } catch {
+        return []
+      }
+    },
+    /** 恢复历史对局 */
+    restoreGame(id: number) {
+      const entry = this.historyGames().find((g) => g.id === id)
+      if (!entry) return
+      this.importSGF(entry.sgf)
+      this.mode = entry.mode
+      this.humanColor = entry.humanColor
+      this.komi = entry.komi
+      this.gameId = entry.id
+      this.editBaseLen = 0
+      this.editNextColor = 1
+    },
   },
 })
+
+export interface GameHistoryEntry {
+  id: number
+  ts: number
+  size: number
+  mode: GameMode
+  komi: number
+  humanColor: 1 | -1
+  sgf: string
+  finished: boolean
+  turns: number
+}
+
+const GAMES_KEY = 'go-battle-games'

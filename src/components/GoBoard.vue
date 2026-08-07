@@ -39,6 +39,21 @@ function handleClick(e: MouseEvent) {
     g.editClick({ x, y })
     return
   }
+  // 点击 AI 候选点 → 显示/切换变化图（点击其他位置则清除并正常落子）
+  if (analysis.candidates.length > 0) {
+    const hit = analysis.candidates.find((c) => c.point && c.point.x === x && c.point.y === y)
+    if (hit) {
+      if (hit.pv && hit.pv.length > 0) {
+        // 再次点击同一候选点 → 清除变化
+        if (analysis.variation.length > 0 && analysis.variation[0]?.x === x && analysis.variation[0]?.y === y) {
+          analysis.clearVariation()
+        } else {
+          analysis.setVariation(hit.pv)
+        }
+      }
+      return // 点击候选点不落子（浏览变化图）
+    }
+  }
   if (!g.isHumanTurn) return
   g.playHuman({ x, y })
 }
@@ -234,6 +249,33 @@ function draw() {
       ctx.strokeText(label, p.x, ly)
       ctx.fillStyle = wr > 0.6 ? '#c41e1e' : '#7a4a12'
       ctx.fillText(label, p.x, ly)
+    }
+  }
+
+  // 变化图：AI 预想的后续着法（pv[0] 是候选点本身，画后续序列）
+  if (analysis.variation.length > 1 && !g.state.finished) {
+    const startColor = board.turn
+    for (let k = 1; k < analysis.variation.length; k++) {
+      const p = analysis.variation[k]
+      if (p.x >= n || p.y >= n) continue
+      const color = k % 2 === 1 ? (startColor === 1 ? -1 : 1) : startColor
+      const cp = toCanvasPoint(p)
+      const r = CELL / 2 - 6
+      ctx.globalAlpha = 0.85
+      ctx.beginPath()
+      ctx.arc(cp.x, cp.y, r, 0, Math.PI * 2)
+      ctx.fillStyle = color === 1 ? '#333' : '#ddd'
+      ctx.fill()
+      ctx.strokeStyle = color === 1 ? '#000' : '#999'
+      ctx.lineWidth = 0.5
+      ctx.stroke()
+      // 序号
+      ctx.globalAlpha = 1
+      ctx.fillStyle = color === 1 ? '#fff' : '#222'
+      ctx.font = 'bold 9px sans-serif'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(String(k), cp.x, cp.y)
     }
   }
 

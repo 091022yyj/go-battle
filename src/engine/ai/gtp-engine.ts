@@ -34,6 +34,42 @@ function gtpToPoint(s: string, size: number): { x: number; y: number } | null {
   return { x, y }
 }
 
+/**
+ * 解析单行 KataGo info（可能含多个候选段），按点去重取 visits 最大的快照。
+ * 提取为模块级函数便于单元测试。
+ */
+export function parseInfoLineToCandidates(line: string, state: GameState): CandidateMove[] {
+  const seen = new Map<string, CandidateMove>()
+  const re = /move\s+(\w+)\s+.*?visits\s+(\d+)\s+.*?winrate\s+([\d.]+)\s+.*?scoreLead\s+([-\d.]+)/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(line))) {
+    const point = gtpToPoint(m[1], state.size)
+    if (!point) continue
+    // 解析 pv（AI 预想的后续着法，供变化图展示）；KataGo 输出大写坐标
+    let pv: { x: number; y: number }[] | undefined
+    const pvMatch = line.match(/pv\s+([a-zA-Z]+\d+(?:\s+[a-zA-Z]+\d+)*)/)
+    if (pvMatch) {
+      pv = pvMatch[1]
+        .trim()
+        .split(/\s+/)
+        .map((s) => gtpToPoint(s, state.size))
+        .filter((p): p is { x: number; y: number } => p !== null)
+    }
+    const cand: CandidateMove = {
+      point,
+      visits: parseInt(m[2], 10),
+      winRate: parseFloat(m[3]),
+      scoreLead: parseFloat(m[4]),
+      pv,
+    }
+    const key = `${point.x},${point.y}`
+    const prev = seen.get(key)
+    if (!prev || cand.visits >= prev.visits) seen.set(key, cand)
+  }
+  return [...seen.values()].sort((a, b) => b.winRate - a.winRate)
+}
+
+
 export class GTPEngine implements EngineAdapter {
   name: string
   engineType = 'kata-gtp' as const
@@ -426,22 +462,15 @@ export class GTPEngine implements EngineAdapter {
    * （info move E5 visits N ... info move F5 visits N ...），
    * 按点去重取 visits 最大的快照。
    */
+/**
+ * 按点去重取 visits 最大的快照。
+ */
   #parseInfoLines(response: string, state: GameState): CandidateMove[] {
     const seen = new Map<string, CandidateMove>()
     const lines = response.split('\n').filter((l) => l.startsWith('info'))
     for (const line of lines) {
-      const re = /move\s+(\w+)\s+.*?visits\s+(\d+)\s+.*?winrate\s+([\d.]+)\s+.*?scoreLead\s+([-\d.]+)/gi
-      let m: RegExpExecArray | null
-      while ((m = re.exec(line))) {
-        const point = gtpToPoint(m[1], state.size)
-        if (!point) continue
-        const cand: CandidateMove = {
-          point,
-          visits: parseInt(m[2], 10),
-          winRate: parseFloat(m[3]),
-          scoreLead: parseFloat(m[4]),
-        }
-        const key = `${point.x},${point.y}`
+      for (const cand of parseInfoLineToCandidates(line, state)) {
+        const key = `${cand.point.x},${cand.point.y}`
         const prev = seen.get(key)
         if (!prev || cand.visits >= prev.visits) seen.set(key, cand)
       }

@@ -101,7 +101,9 @@ export const useEngineStore = defineStore('engine', () => {
                   variations: best.point ? [[{ player: g.state.turn, point: best.point }]] : [],
                   candidates: cands as never,
                 },
-                moveNum
+                moveNum,
+                // 曲线统一存黑方视角胜率
+                g.state.turn === 1 ? best.winRate : 1 - best.winRate
               )
             }
           })

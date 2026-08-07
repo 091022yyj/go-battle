@@ -41,6 +41,36 @@ function saveGTPConfig() {
 
 const gtpStatus = ref<'disconnected' | 'connecting' | 'connected'>('disconnected')
 const hintLoading = ref(false)
+const showHistory = ref(false)
+const showHandicap = ref(false)
+
+/** 让子棋：摆 N 子黑棋星位，白先下 */
+function startHandicap(n: number) {
+  showHandicap.value = false
+  g.handicapGame(n)
+}
+
+/** 恢复历史对局（importSGF 会停止旧引擎，需重新创建引擎并同步 UI 配置） */
+function loadHistory(id: number) {
+  g.restoreGame(id)
+  showHistory.value = false
+  // 同步配置 UI
+  size.value = g.size
+  mode.value = g.mode
+  humanColor.value = g.humanColor
+  // 重新创建引擎（恢复后 AI 继续工作）
+  e.stop()
+  if (g.mode === 'pve') {
+    const ai = createEngine(g.humanColor === 1 ? -1 : 1)
+    e.startPve(g, ai)
+  } else if (g.mode === 'evc') {
+    const shared = createGTPEngine(1, gtpConfig.value)
+    shared.setLevel(level.value)
+    shared.setRules(rules.value, RULE_KOMI[rules.value])
+    shared.setStyle(style.value)
+    e.startEvc(g, shared, shared)
+  }
+}
 
 // 配置持久化 key：自动恢复上次设置并直接开始对局
 const CONFIG_KEY = 'go-battle-config'
@@ -348,6 +378,7 @@ const engineStatusText = computed(() => {
         {{ e.paused ? '▶ 继续' : '⏸ 暂停AI' }}
       </button>
       <button class="btn" @click="g.enterEdit()" :disabled="g.state.finished || g.editing">✏️ 摆子</button>
+      <button class="btn" @click="showHistory = !showHistory">🗂 历史</button>
       <button
         v-if="mode === 'pve' && g.isHumanTurn && !g.state.finished"
         class="btn btn-hint"
@@ -368,6 +399,32 @@ const engineStatusText = computed(() => {
       <button class="btn btn-primary" @click="g.exitEditAndPlay(1)">▶ 黑先下</button>
       <button class="btn btn-primary" @click="g.exitEditAndPlay(-1)">▶ 白先下</button>
       <button class="btn" @click="g.cancelEdit()">✖ 取消</button>
+    </div>
+
+    <!-- 让子棋 -->
+    <div v-if="showHandicap" class="edit-bar">
+      <span class="edit-title">🎯 让子棋（自动摆黑子星位，白先下）：</span>
+      <button v-for="n in [2, 3, 4, 5, 6, 7, 8, 9]" :key="n" class="btn" @click="startHandicap(n)">让 {{ n }} 子</button>
+      <button class="btn" @click="showHandicap = false">✖ 关闭</button>
+    </div>
+
+    <!-- 历史对局 -->
+    <div v-if="showHistory" class="history-panel">
+      <div class="history-head">
+        <span class="edit-title">🗂 历史对局（自动保存最近 30 局）</span>
+        <button class="btn btn-close" @click="showHistory = false">✕</button>
+      </div>
+      <div v-if="g.historyGames().length === 0" class="history-empty">暂无历史对局，下完一局后自动保存</div>
+      <div
+        v-for="h in g.historyGames()"
+        :key="h.id"
+        class="history-item"
+        @click="loadHistory(h.id)"
+      >
+        <span class="h-time">{{ new Date(h.ts).toLocaleString() }}</span>
+        <span class="h-meta">{{ h.size }} 路 · {{ h.turns }} 手 · {{ h.finished ? '已结束' : '进行中' }}</span>
+        <span class="h-mode">{{ h.mode === 'evc' ? 'AI对战' : '人机' }}</span>
+      </div>
     </div>
   </div>
 </template>
@@ -568,5 +625,64 @@ select:focus, input:focus {
   background: rgba(232,193,112,0.35);
   border-color: #e8c170;
   color: #e8c170;
+}
+
+.history-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 14px;
+  margin-top: 8px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 460px;
+}
+
+.history-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.history-empty {
+  color: #666;
+  font-size: 13px;
+  padding: 8px 0;
+}
+
+.history-item {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #bbb;
+  transition: all 0.15s;
+  background: rgba(255,255,255,0.03);
+}
+
+.history-item:hover {
+  background: rgba(232,193,112,0.12);
+  color: #e8c170;
+}
+
+.h-time {
+  color: #888;
+  font-size: 12px;
+}
+
+.h-meta {
+  flex: 1;
+}
+
+.h-mode {
+  color: #4da3ff;
+  font-size: 12px;
 }
 </style>

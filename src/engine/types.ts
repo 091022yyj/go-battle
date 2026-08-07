@@ -35,6 +35,8 @@ export interface CandidateMove {
   winRate: number
   scoreLead: number
   visits: number
+  /** AI 预想的后续着法序列（变化图），首元素为候选点本身 */
+  pv?: Point[]
 }
 
 export interface Analysis {

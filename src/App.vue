@@ -6,6 +6,7 @@ import AnalysisPanel from './components/AnalysisPanel.vue'
 import MoveList from './components/MoveList.vue'
 import StatusAlert from './components/StatusAlert.vue'
 import { useGameStore } from './stores/game'
+import { useAnalysisStore } from './stores/analysis'
 
 const g = useGameStore()
 
@@ -60,8 +61,27 @@ watch(
   }
 )
 
+// 对局自动保存（防抖 1 秒）
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+watch(
+  () => [g.state.history.length, g.state.finished],
+  () => {
+    if (saveTimer) clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => g.saveToHistory(), 1000)
+  }
+)
+
 // 终局弹窗
 const showOverlay = computed(() => g.state.finished)
+
+// 终局时生成复盘报告（胜率曲线 → 恶手）
+watch(
+  () => g.state.finished,
+  (f) => {
+    if (f) useAnalysisStore().buildReview()
+  }
+)
+const review = computed(() => useAnalysisStore().review)
 
 function newGameFromOverlay() {
   window.dispatchEvent(new CustomEvent('go-battle:new-game'))
@@ -116,6 +136,18 @@ function reviewGame() {
         <p v-if="!g.resigner" class="overlay-diff">
           目差 {{ leadDiff }} 目
         </p>
+        <!-- AI 复盘报告 -->
+        <div v-if="review" class="overlay-review">
+          <h3 class="review-title">📊 AI 复盘</h3>
+          <p v-if="review.badMoves.length === 0" class="review-line">✅ 无重大失误（胜率未出现大幅下滑）</p>
+          <template v-else>
+            <p class="review-line">⚠️ 胜率大幅下滑 {{ review.badMoves.length }} 处：</p>
+            <p v-for="(b, i) in review.badMoves.slice(0, 5)" :key="i" class="review-line">
+              第 {{ b.move }} 手：黑胜率 {{ (b.from * 100).toFixed(0) }}% → {{ (b.to * 100).toFixed(0) }}%（-{{ ((b.from - b.to) * 100).toFixed(0) }}%）
+            </p>
+          </template>
+          <p class="review-line">🏆 黑方胜率峰值：第 {{ review.peakMove }} 手（{{ (review.peakWinRate * 100).toFixed(0) }}%）</p>
+        </div>
         <div class="overlay-actions">
           <button class="overlay-btn primary" @click="newGameFromOverlay">🔄 再来一局</button>
           <button class="overlay-btn" @click="reviewGame">📜 复盘</button>
@@ -283,6 +315,28 @@ body {
   font-size: 16px;
   margin-top: 6px;
   font-weight: 600;
+}
+
+.overlay-review {
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: rgba(77,163,255,0.08);
+  border: 1px solid rgba(77,163,255,0.25);
+  border-radius: 8px;
+  text-align: left;
+  max-width: 360px;
+}
+
+.review-title {
+  font-size: 14px;
+  color: #4da3ff;
+  margin-bottom: 8px;
+}
+
+.review-line {
+  font-size: 13px;
+  color: #ccc;
+  line-height: 1.7;
 }
 
 .overlay-actions {
