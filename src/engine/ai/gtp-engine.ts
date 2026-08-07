@@ -122,7 +122,7 @@ export class GTPEngine implements EngineAdapter {
 
       const timeout = setTimeout(() => {
         this.status = 'error'
-        reject(new Error(`Connection to ${url} timed out`))
+        reject(new Error('连接引擎超时：请确认桥接服务已启动'))
       }, 5000)
 
       ws.onopen = async () => {
@@ -134,7 +134,7 @@ export class GTPEngine implements EngineAdapter {
           resolve()
         } catch {
           this.status = 'error'
-          reject(new Error('Engine not responding to GTP commands'))
+          reject(new Error('引擎未就绪（启动需约 40 秒预热），正在自动重试...'))
         }
       }
 

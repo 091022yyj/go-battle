@@ -19,10 +19,13 @@ export const useEngineStore = defineStore('engine', () => {
   const active = shallowRef<EngineAdapter | null>(null)
   const errorMessage = ref<string | null>(null)
   let timer: ReturnType<typeof setTimeout> | null = null
+  // 引擎未就绪/连接失败自动重试计数（引擎启动预热约 40 秒）
+  let retryCount = 0
 
   async function startEvc(g: GameStore, blackEngine: EngineAdapter, whiteEngine: EngineAdapter) {
     cleanup()
     errorMessage.value = null
+    retryCount = 0
     black.value = blackEngine
     white.value = whiteEngine
     await tick(g)
@@ -31,6 +34,7 @@ export const useEngineStore = defineStore('engine', () => {
   async function startPve(g: GameStore, ai: EngineAdapter) {
     cleanup()
     errorMessage.value = null
+    retryCount = 0
     if (g.humanColor === 1) white.value = ai
     else black.value = ai
     await tick(g)
@@ -96,6 +100,7 @@ export const useEngineStore = defineStore('engine', () => {
         // 代次校验：期间发生新局/悔棋/导入则丢弃
         if (gen !== g.generation) return
         if (g.state.turn !== move.player) return
+        retryCount = 0 // 思考成功，重置重试计数
         g.playMove(move)
         analysisStore.clearCandidates()
         await tick(g)
@@ -105,6 +110,16 @@ export const useEngineStore = defineStore('engine', () => {
         // Pause EVC mode if an engine fails
         if (g.mode === 'evc') {
           active.value = null
+        }
+        // 引擎未就绪/连接失败：自动重试（覆盖启动预热窗口），
+        // 避免页面打开时引擎还在预热就报错并一直残留
+        const msg = (err as Error).message || ''
+        if (retryCount < 8 && /未就绪|连接引擎超时|not ready|not responding|failed to connect|connection closed/i.test(msg)) {
+          retryCount++
+          errorMessage.value = `引擎未就绪（${retryCount}/8），自动重试中...`
+          timer = setTimeout(() => {
+            tick(g)
+          }, 5000)
         }
       }
     }, 20)
