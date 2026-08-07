@@ -29,13 +29,17 @@ function toCanvasPoint(p: Point): { x: number; y: number } {
 
 function handleClick(e: MouseEvent) {
   if (!canvas.value || g.state.finished) return
-  if (!g.isHumanTurn) return
   const rect = canvas.value.getBoundingClientRect()
   const scaleX = canvas.value.width / rect.width
   const scaleY = canvas.value.height / rect.height
   const x = Math.round((e.clientX - rect.left) * scaleX / CELL - MARGIN / CELL)
   const y = Math.round((e.clientY - rect.top) * scaleY / CELL - MARGIN / CELL)
   if (x < 0 || y < 0 || x >= g.size || y >= g.size) return
+  if (g.editing) {
+    g.editClick({ x, y })
+    return
+  }
+  if (!g.isHumanTurn) return
   g.playHuman({ x, y })
 }
 
@@ -91,7 +95,7 @@ function draw() {
   const canvasEl = canvas.value
   if (!canvasEl || !ctx) return
   const n = g.size
-  const board = g.displayState // 回放视图：悔棋/跳转后只显示到游标位置
+  const board = g.editing ? g.editState : g.displayState // 编辑模式显示摆子棋盘
   const w = MARGIN * 2 + (n - 1) * CELL
   const h = MARGIN * 2 + (n - 1) * CELL
   canvasEl.width = w

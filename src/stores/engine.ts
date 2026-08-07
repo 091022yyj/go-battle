@@ -18,14 +18,31 @@ export const useEngineStore = defineStore('engine', () => {
   const white = shallowRef<EngineAdapter | null>(null)
   const active = shallowRef<EngineAdapter | null>(null)
   const errorMessage = ref<string | null>(null)
+  const paused = ref(false)
   let timer: ReturnType<typeof setTimeout> | null = null
   // 引擎未就绪/连接失败自动重试计数（引擎启动预热约 40 秒）
   let retryCount = 0
+
+  /** 暂停 AI：清除定时器，在途思考结果会被丢弃（paused 检查） */
+  function pause() {
+    paused.value = true
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+  }
+
+  /** 继续 AI：从当前轮次恢复思考 */
+  function resume(g: GameStore) {
+    paused.value = false
+    if (!g.state.finished) tick(g)
+  }
 
   async function startEvc(g: GameStore, blackEngine: EngineAdapter, whiteEngine: EngineAdapter) {
     cleanup()
     errorMessage.value = null
     retryCount = 0
+    paused.value = false
     black.value = blackEngine
     white.value = whiteEngine
     await tick(g)
@@ -35,13 +52,14 @@ export const useEngineStore = defineStore('engine', () => {
     cleanup()
     errorMessage.value = null
     retryCount = 0
+    paused.value = false
     if (g.humanColor === 1) white.value = ai
     else black.value = ai
     await tick(g)
   }
 
   async function tick(g: GameStore) {
-    if (g.state.finished) return
+    if (g.state.finished || paused.value) return
     const engine = g.state.turn === 1 ? black.value : white.value
     active.value = engine
     if (!engine) return
@@ -49,7 +67,7 @@ export const useEngineStore = defineStore('engine', () => {
     const gen = g.generation
 
     timer = setTimeout(async () => {
-      if (g.state.finished) return
+      if (g.state.finished || paused.value) return
       try {
         let move: Move
         const analysisStore = useAnalysisStore()
@@ -99,6 +117,7 @@ export const useEngineStore = defineStore('engine', () => {
 
         // 代次校验：期间发生新局/悔棋/导入则丢弃
         if (gen !== g.generation) return
+        if (paused.value) return // 暂停：丢弃在途结果
         if (g.state.turn !== move.player) return
         retryCount = 0 // 思考成功，重置重试计数
         g.playMove(move)
@@ -130,11 +149,16 @@ export const useEngineStore = defineStore('engine', () => {
     if (g.mode === 'pve' && g.state.turn !== g.humanColor) tick(g)
   }
 
-  function restartEngine(g: GameStore, color: 1 | -1) {
+  function restartEngine(g: GameStore, color: 1 | -1, forceResync = false) {
     errorMessage.value = null
+    paused.value = false // 强制重新思考（悔棋/摆子退出时解除暂停）
     const engine = color === 1 ? black.value : white.value
     if (engine) {
       engine.status = 'idle'
+      if (forceResync) {
+        // 强制引擎全量重放历史（摆子编辑后棋盘与引擎不同步时使用）
+        ;(engine as unknown as { forceResync?: () => void }).forceResync?.()
+      }
     }
     if (g.state.turn === color) tick(g)
   }
@@ -158,6 +182,9 @@ export const useEngineStore = defineStore('engine', () => {
     white,
     active,
     errorMessage,
+    paused,
+    pause,
+    resume,
     startEvc,
     startPve,
     tick,

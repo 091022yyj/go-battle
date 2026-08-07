@@ -19,6 +19,10 @@ export const useGameStore = defineStore('game', {
     cursor: 0 as number,
     // 对局代次：新局/悔棋/导入/回放截断时递增，用于丢弃旧引擎的迟到结果
     generation: 0 as number,
+    // 摆子编辑模式
+    editing: false,
+    editColor: 1 as 1 | -1,
+    editHistory: [] as { player: 1 | -1; point: Point }[],
   }),
   getters: {
     currentPlayer(): 1 | -1 {
@@ -35,6 +39,19 @@ export const useGameStore = defineStore('game', {
     displayState(): GameState {
       const s = stateFromHistory(this.state, this.state.history.slice(0, this.cursor))
       s.finished = this.state.finished
+      return s
+    },
+    // 编辑视图：按摆子序列强制放置（任意颜色、不校验合法性）
+    editState(): GameState {
+      const s = createBoard(this.size)
+      for (const m of this.editHistory) {
+        if (!m.point) continue
+        const i = m.point.y * s.size + m.point.x
+        if (i >= 0 && i < s.stones.length && s.stones[i] === 0) {
+          s.stones[i] = m.player
+        }
+      }
+      s.history = this.editHistory as unknown as GameState['history']
       return s
     },
   },
@@ -119,6 +136,68 @@ export const useGameStore = defineStore('game', {
       // 停止旧引擎的在途思考，清空上一局的分析残留
       useEngineStore().stop()
       useAnalysisStore().reset()
+    },
+    // ===== 摆子编辑模式 =====
+    enterEdit() {
+      if (this.state.finished) return
+      this.generation++
+      useEngineStore().pause()
+      useAnalysisStore().reset()
+      // 编辑起点 = 当前局面（到回放游标为止的全部着法，跳过 pass 手）
+      this.editHistory = this.state.history
+        .slice(0, this.cursor)
+        .filter((m): m is { player: 1 | -1; point: Point } => !!m.point)
+        .map((m) => ({ player: m.player, point: m.point }))
+      this.editColor = this.state.turn
+      this.editing = true
+    },
+    editClick(point: Point) {
+      if (!this.editing) return
+      const i = point.y * this.size + point.x
+      if (i < 0 || i >= this.size * this.size) return
+      const s = this.editState
+      if (s.stones[i] !== 0) {
+        // 点击已有棋子：移除该点最后一条摆子记录
+        for (let k = this.editHistory.length - 1; k >= 0; k--) {
+          const m = this.editHistory[k]
+          if (m.point && m.point.x === point.x && m.point.y === point.y) {
+            this.editHistory = [...this.editHistory.slice(0, k), ...this.editHistory.slice(k + 1)]
+            return
+          }
+        }
+      } else {
+        this.editHistory = [...this.editHistory, { player: this.editColor, point }]
+      }
+    },
+    setEditColor(c: 1 | -1) {
+      this.editColor = c
+    },
+    clearEdit() {
+      this.editHistory = []
+    },
+    cancelEdit() {
+      this.editing = false
+      this.editHistory = []
+      useEngineStore().resume(this as unknown as ReturnType<typeof useGameStore>)
+    },
+    /**
+     * 退出编辑并让指定颜色先手。
+     * 编辑棋盘按摆子序列强制放置，历史即摆子序列（引擎按序 play 同步）。
+     */
+    exitEditAndPlay(nextColor: 1 | -1) {
+      const s = this.editState
+      s.turn = nextColor
+      s.finished = false
+      s.passCount = 0
+      s.ko = null
+      s.captured = { black: 0, white: 0 }
+      this.state = s
+      this.cursor = s.history.length
+      this.editing = false
+      this.editHistory = []
+      this.generation++
+      // 强制引擎全量重放（摆子后的棋盘与引擎不同步），restartEngine 内部解除暂停并启动思考
+      useEngineStore().restartEngine(this as unknown as ReturnType<typeof useGameStore>, nextColor, true)
     },
   },
 })

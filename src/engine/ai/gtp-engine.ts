@@ -240,6 +240,14 @@ export class GTPEngine implements EngineAdapter {
   #syncedMoves = 0
 
   /**
+   * 强制引擎全量重放历史（摆子编辑/外部改盘后使用）。
+   * 将已同步手数设为极大值，触发 replayHistory 的 full 重放分支。
+   */
+  forceResync(): void {
+    this.#syncedMoves = Number.MAX_SAFE_INTEGER
+  }
+
+  /**
    * 同步棋盘历史到引擎（增量优化：只补发新增手数）。
    * 历史被截断（悔棋/回放）时完全重放。
    */

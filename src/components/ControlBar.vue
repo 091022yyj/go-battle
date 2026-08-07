@@ -19,7 +19,6 @@ const level = ref(3)
 const engineType = ref<'simple' | 'kata-wasm' | 'kata-gtp'>('kata-gtp')
 const rules = ref<GoRules>('chinese')
 const style = ref<GoStyle>('balanced')
-const evsPaused = ref(false)
 
 // 规则 → 贴目（目）
 const RULE_KOMI: Record<GoRules, number> = {
@@ -143,16 +142,12 @@ async function showHint() {
   }
 }
 
-/** EVS 暂停/继续 */
-function toggleEvs() {
-  if (evsPaused.value) {
-    evsPaused.value = false
-    if (g.mode === 'evc' && !g.state.finished) {
-      e.restartEngine(g as never, g.state.turn)
-    }
+/** 暂停/继续 AI（人机与 EVS 通用） */
+function togglePause() {
+  if (e.paused) {
+    e.resume(g as never)
   } else {
-    evsPaused.value = true
-    e.stop()
+    e.pause()
   }
 }
 
@@ -197,7 +192,6 @@ function createEngine(player: 1 | -1): EngineAdapter {
 async function startGame() {
   e.stop()
   a.reset()
-  evsPaused.value = false
   g.newGame(size.value, mode.value, RULE_KOMI[rules.value])
 
   try {
@@ -347,21 +341,33 @@ const engineStatusText = computed(() => {
 
     <div class="control-group actions">
       <button class="btn btn-primary" @click="startGame">🔄 新局</button>
-      <button class="btn" @click="g.undo()" :disabled="g.state.history.length === 0 || g.mode === 'evc'">↩ 悔棋</button>
-      <button class="btn" @click="g.passTurn()" :disabled="g.state.finished || !g.isHumanTurn">✋ Pass</button>
-      <button class="btn" @click="g.resign()" :disabled="g.state.finished">🏳 认输</button>
+      <button class="btn" @click="g.undo()" :disabled="g.state.history.length === 0 || g.mode === 'evc' || g.editing">↩ 悔棋</button>
+      <button class="btn" @click="g.passTurn()" :disabled="g.state.finished || !g.isHumanTurn || g.editing">✋ Pass</button>
+      <button class="btn" @click="g.resign()" :disabled="g.state.finished || g.editing">🏳 认输</button>
+      <button class="btn" @click="togglePause" :disabled="g.state.finished || g.editing">
+        {{ e.paused ? '▶ 继续' : '⏸ 暂停AI' }}
+      </button>
+      <button class="btn" @click="g.enterEdit()" :disabled="g.state.finished || g.editing">✏️ 摆子</button>
       <button
         v-if="mode === 'pve' && g.isHumanTurn && !g.state.finished"
         class="btn btn-hint"
         @click="showHint"
-        :disabled="hintLoading"
+        :disabled="hintLoading || g.editing"
       >
         💡 {{ hintLoading ? '分析中...' : '最佳着法' }}
       </button>
-      <button v-if="mode === 'evc' && !g.state.finished" class="btn" @click="toggleEvs">
-        {{ evsPaused ? '▶ 继续' : '⏸ 暂停' }}
-      </button>
       <span v-if="engineStatusText" class="engine-status">{{ engineStatusText }}</span>
+    </div>
+
+    <!-- 摆子编辑工具条 -->
+    <div v-if="g.editing" class="edit-bar">
+      <span class="edit-title">✏️ 摆子模式（点击棋盘放置/移除棋子）</span>
+      <button class="btn" :class="{ active: g.editColor === 1 }" @click="g.setEditColor(1)">⚫ 摆黑</button>
+      <button class="btn" :class="{ active: g.editColor === -1 }" @click="g.setEditColor(-1)">⚪ 摆白</button>
+      <button class="btn" @click="g.clearEdit()">🗑 清空</button>
+      <button class="btn btn-primary" @click="g.exitEditAndPlay(1)">▶ 黑先下</button>
+      <button class="btn btn-primary" @click="g.exitEditAndPlay(-1)">▶ 白先下</button>
+      <button class="btn" @click="g.cancelEdit()">✖ 取消</button>
     </div>
   </div>
 </template>
@@ -538,5 +544,29 @@ select:focus, input:focus {
   font-size: 13px;
   color: #aaa;
   margin-left: 8px;
+}
+
+.edit-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  margin-top: 8px;
+  background: rgba(232,193,112,0.08);
+  border: 1px dashed rgba(232,193,112,0.4);
+  border-radius: 8px;
+}
+
+.edit-title {
+  font-size: 13px;
+  color: #e8c170;
+  margin-right: 6px;
+}
+
+.edit-bar .btn.active {
+  background: rgba(232,193,112,0.35);
+  border-color: #e8c170;
+  color: #e8c170;
 }
 </style>
