@@ -142,6 +142,12 @@ export class GTPEngine implements EngineAdapter {
         this.#connected = false
         this.#initialized = false
         if (this.status !== 'error') this.status = 'error'
+        // 立即拒绝所有挂起请求（如进行中的 kata-analyze），
+        // 避免页面卡 60-90 秒等超时
+        for (const [, req] of this.#pending) {
+          req.reject(new Error('Engine connection closed'))
+        }
+        this.#pending.clear()
       }
 
       ws.onerror = () => {

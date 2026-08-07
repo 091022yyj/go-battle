@@ -379,7 +379,18 @@ wss.on('connection', (ws) => {
     console.log(`[bridge] Browser disconnected (conn-${connId})`)
     // 清理该连接的排队命令与流式记录，避免残留命令阻塞队列
     cancelledConns.add(connId)
+    const targetId = lastStreaming.get(connId)
     lastStreaming.delete(connId)
+    // 关键：若该连接的流式分析正在引擎中执行，必须立即终止（写空行），
+    // 否则分析会继续占用引擎 60 秒，期间所有新连接的命令全部排队等待，
+    // 表现为页面卡死、反复刷新无响应。
+    if (targetId !== undefined) {
+      if (currentId === targetId && pendingRequests.has(targetId)) {
+        try { engineProc?.stdin.write('\n') } catch {}
+      } else if (pendingRequests.has(targetId)) {
+        pendingKill.add(targetId)
+      }
+    }
   })
 
   ws.on('error', (err) => {
