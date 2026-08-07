@@ -25,3 +25,6 @@ dist-ssr
 
 # KataGo WASM model files (user downloads separately)
 public/kata/
+
+# KataGo GTP 日志
+/gtp_logs/
