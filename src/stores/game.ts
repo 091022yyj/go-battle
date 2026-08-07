@@ -162,6 +162,9 @@ export const useGameStore = defineStore('game', {
       if (this.state.finished || !this.isHumanTurn) return
       this.state = pass(this.state)
       this.cursor = this.state.history.length
+      // 停一手后轮到 AI，必须触发引擎思考（否则对局卡住）
+      const engine = useEngineStore()
+      engine.onHumanMove(this as unknown as ReturnType<typeof useGameStore>)
     },
     resign() {
       if (this.state.finished) return

@@ -372,7 +372,7 @@ const engineStatusText = computed(() => {
     <div class="control-group actions">
       <button class="btn btn-primary" @click="startGame">🔄 新局</button>
       <button class="btn" @click="g.undo()" :disabled="g.state.history.length === 0 || g.mode === 'evc' || g.editing">↩ 悔棋</button>
-      <button class="btn" @click="g.passTurn()" :disabled="g.state.finished || !g.isHumanTurn || g.editing">✋ Pass</button>
+      <button class="btn" @click="g.passTurn()" :disabled="g.state.finished || !g.isHumanTurn || g.editing">✋ 停一手</button>
       <button class="btn" @click="g.resign()" :disabled="g.state.finished || g.editing">🏳 认输</button>
       <button class="btn" @click="togglePause" :disabled="g.state.finished || g.editing">
         {{ e.paused ? '▶ 继续' : '⏸ 暂停AI' }}

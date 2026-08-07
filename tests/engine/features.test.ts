@@ -4,6 +4,7 @@ import { createBoard } from '../../src/engine/board'
 import { parseInfoLineToCandidates } from '../../src/engine/ai/gtp-engine'
 import { useGameStore } from '../../src/stores/game'
 import { useAnalysisStore } from '../../src/stores/analysis'
+import { useEngineStore } from '../../src/stores/engine'
 
 describe('变化图：pv 解析', () => {
   const state = createBoard(19)
@@ -124,7 +125,37 @@ describe('对局自动保存：saveToHistory/restoreGame', () => {
   })
 })
 
-describe('AI 复盘：buildReview 恶手检测', () => {  beforeEach(() => setActivePinia(createPinia()))
+describe('停一手（Pass）：人类停一手后 AI 接招', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('停一手记录 pass，轮到 AI 并自动应手', async () => {
+    const g = useGameStore()
+    g.newGame(9, 'pve', 7.5) // 9 路避免 SimpleAI 在 19 路空盘上模拟过慢
+    g.humanColor = 1
+    const e = useEngineStore()
+    const { createSimpleAI } = await import('../../src/engine/ai/simple-ai')
+    e.startPve(g as never, createSimpleAI(-1))
+    g.passTurn()
+    expect(g.state.history.length).toBe(1)
+    expect(g.state.history[0].point).toBeNull() // 停一手
+    expect(g.state.turn).toBe(-1) // 轮到 AI
+    // AI 应自动思考并落子（simple AI 同步很快）
+    await new Promise((r) => setTimeout(r, 600))
+    expect(g.state.history.length).toBe(2)
+    expect(g.state.turn).toBe(1)
+  })
+
+  it('非人类回合不能停一手', () => {
+    const g = useGameStore()
+    g.newGame(19, 'pve', 7.5)
+    g.humanColor = -1 // 人类执白，初始黑先（AI）
+    g.passTurn()
+    expect(g.state.history.length).toBe(0)
+  })
+})
+
+describe('AI 复盘：buildReview 恶手检测', () => {
+  beforeEach(() => setActivePinia(createPinia()))
 
   it('胜率大幅下滑的手被标记为恶手', () => {
     const a = useAnalysisStore()
